@@ -124,6 +124,7 @@ static size_t output_len;
 static int job_result;
 static bool httpd_running;
 static bool stop_requested;
+static bool httpd_privileged;
 static u32 upload_id, task_id;
 static ulong buffer_addr;
 static size_t buffer_size;
@@ -159,6 +160,12 @@ static bool http_busy(void)
 {
 	return post_state.connection || job_state == HTTP_JOB_QUEUED ||
 	       job_state == HTTP_JOB_RUNNING || backup_ready || downloads;
+}
+
+/* Automatic recovery permits only retrying the installed system or reset. */
+static bool http_operation_requires_privilege(const char *op)
+{
+	return strcmp(op, "boot-production") && strcmp(op, "reset");
 }
 
 /* NAND operations yield between pages or eraseblocks to keep TCP alive. */
@@ -290,9 +297,11 @@ static void build_info(void)
 		json_printf(&j, ",\"ram_bytes\":%llu,\"flash_bytes\":%llu",
 			    (unsigned long long)gd->ram_size, (unsigned long long)flash_size);
 		json_printf(&j, ",\"version\":"); json_string(&j, version_string);
-		json_printf(&j, ",\"ubi\":%s,\"rebuild\":%s,\"board_data\":[",
+		json_printf(&j, ",\"ubi\":%s,\"rebuild\":%s,\"privileged\":%s,"
+			    "\"board_data\":[",
 			    CONFIG_IS_ENABLED(CMD_UBI) ? "true" : "false",
-			    recovery_layout_present() ? "true" : "false");
+			    recovery_layout_present() ? "true" : "false",
+			    httpd_privileged ? "true" : "false");
 		for (index = 0; index < HTTPD_BOARD_DATA_MAX; index++) {
 			if (board_data_config(index, &board_data))
 				break;
@@ -323,7 +332,8 @@ static int fs_json(struct fs_file *file, int code, const char *body, bool reply)
 	if (!data) { free(owner); return 0; }
 	head = snprintf(data, 160, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\n"
 			"Content-Length: %zu\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-			code, code == 200 ? "OK" : code == 409 ? "Conflict" : "Error", len);
+			code, code == 200 ? "OK" : code == 403 ? "Forbidden" :
+			code == 409 ? "Conflict" : "Error", len);
 	memcpy(data + head, body, len);
 	fs_set_data(file, data, head + len);
 	file->flags = FS_FILE_FLAGS_HEADER_INCLUDED;
@@ -341,7 +351,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
 		fs_set_data(file, httpd_page, httpd_page_size);
 		return 1;
 	}
-	if (!strcmp(name, "/api/device"))
+	if (!strcmp(name, "/api/device") || !strcmp(name, "/api/info"))
 		return fs_json(file, 200, info_buf, false);
 	if (!strcmp(name, "/api/storage"))
 		return fs_json(file, 200, catalog_buf, false);
@@ -370,10 +380,17 @@ int fs_open_custom(struct fs_file *file, const char *name)
 	}
 	if (!strcmp(name, "/api/busy"))
 		return fs_json(file, 409, "{\"error\":\"busy\"}", false);
+	if (!strcmp(name, "/api/forbidden"))
+		return fs_json(file, 403,
+			       "{\"error\":\"manual or physical recovery required\"}",
+			       false);
 	if (!strcmp(name, "/api/error"))
 		return fs_json(file, 400, "{\"error\":\"invalid request\"}", false);
-	if (!strncmp(name, "/api/download/", 14))
+	if (!strncmp(name, "/api/download/", 14)) {
+		if (!httpd_privileged)
+			return fs_open_custom(file, "/api/forbidden");
 		return open_download(file, name + 14);
+	}
 	if (!strncmp(name, "/api/", 5))
 		return fs_json(file, 404, "{\"error\":\"unknown API\"}", false);
 	return 0;
@@ -559,6 +576,14 @@ err_t httpd_post_begin(void *connection, const char *uri,
 	struct mtd_info *mtd;
 	phys_addr_t allocated, safe_end;
 
+	/* Reject uploads before reserving or writing any upload memory. */
+	if (!httpd_privileged &&
+	    (!strcmp(uri, "/api/upload") ||
+	     !strcmp(uri, "/api/upload-all-flash"))) {
+		strlcpy(response_uri, "/api/forbidden", response_uri_len);
+		return ERR_ARG;
+	}
+
 	if (http_busy()) {
 		strlcpy(response_uri, "/api/busy", response_uri_len);
 		return ERR_ARG;
@@ -685,7 +710,11 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
 	}
 	if (ret && post_state.kind == HTTP_POST_FLASH_ALL_UPLOAD)
 		release_flash_all_upload();
-	strlcpy(response_uri, ret ? "/api/error" : "/api/reply", response_uri_len);
+	if (ret == -EACCES)
+		strlcpy(response_uri, "/api/forbidden", response_uri_len);
+	else
+		strlcpy(response_uri, ret ? "/api/error" : "/api/reply",
+			response_uri_len);
 	memset(&post_state, 0, sizeof(post_state));
 }
 
@@ -810,8 +839,12 @@ static int parse_task(void)
 	u64 id, size, offset;
 
 	if (json_request_init(&r, storage_buf) ||
-	    json_text(&r, "operation", op, sizeof(op)) ||
-	    json_uint(&r, "upload_id", &id))
+	    json_text(&r, "operation", op, sizeof(op)))
+		return -EINVAL;
+	/* Fail closed for new operations, before parsing privileged arguments. */
+	if (!httpd_privileged && http_operation_requires_privilege(op))
+		return -EACCES;
+	if (json_uint(&r, "upload_id", &id))
 		return -EINVAL;
 	if (flash_all_upload_ready && strcmp(op, "flash-all"))
 		return -EBUSY;
@@ -1779,7 +1812,7 @@ bool uboot_httpd_is_running(void)
 	return httpd_running;
 }
 
-int uboot_httpd_start(bool with_dhcp)
+int uboot_httpd_start_mode(bool with_dhcp, bool privileged)
 {
 	struct udevice *udev;
 	struct netif *netif;
@@ -1790,6 +1823,9 @@ int uboot_httpd_start(bool with_dhcp)
 
 	if (httpd_running)
 		return 0;
+
+	/* Latch the mode for this session; environment writes cannot elevate it. */
+	httpd_privileged = privileged;
 
 	recovery_addr = env_get("httpd_ipaddr");
 	if (!recovery_addr || !*recovery_addr)
@@ -1848,6 +1884,9 @@ int uboot_httpd_start(bool with_dhcp)
 	ipaddr = env_get("ipaddr");
 	printf("HTTP management: http://%s/  (%s)\n",
 	       ipaddr, with_dhcp ? "DHCP enabled" : "static address");
+	printf("Recovery privileges: %s\n",
+	       httpd_privileged ? "FULL (manual/physical recovery)" :
+	       "SAFE (automatic fallback)");
 	puts("Press Ctrl-C to return to the serial console.\n");
 	clear_ctrlc();
 
@@ -1873,4 +1912,10 @@ int uboot_httpd_start(bool with_dhcp)
 	led_activity_on();
 	clear_ctrlc();
 	return ret < 0 ? ret : 0;
+}
+
+/* Existing callers, including the physical Reset button, retain full access. */
+int uboot_httpd_start(bool with_dhcp)
+{
+	return uboot_httpd_start_mode(with_dhcp, true);
 }
