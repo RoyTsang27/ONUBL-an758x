@@ -31,6 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Apply pinned v2026.10 source for validation
+        run: |
+          printf '%s  %s\n' 'abd00eaad506546c90ba03dc28d3322d34af7e9cb34b7c116d6b309ab09edf65' 'uboot-v2026.10-source.patch.gz' | sha256sum -c -
+          gzip -dc uboot-v2026.10-source.patch.gz > "$RUNNER_TEMP/uboot-v2026.10.patch"
+          git apply --check "$RUNNER_TEMP/uboot-v2026.10.patch"
+          git apply "$RUNNER_TEMP/uboot-v2026.10.patch"
+          grep -q '^PATCHLEVEL = 10$' Makefile
+
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -44,6 +52,9 @@ jobs:
           curl -L https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.4.1.tar.gz |
             tar -xz
           echo "MBEDTLS_DIR=$PWD/mbedtls-3.4.1" >> "$GITHUB_ENV"
+
+      - name: Check recovery UBI compatibility
+        run: python3 test/airoha/ubi_compat.py
 
       - name: Build ${{ matrix.target }}
         env:
