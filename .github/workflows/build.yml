@@ -45,6 +45,17 @@ jobs:
             tar -xz
           echo "MBEDTLS_DIR=$PWD/mbedtls-3.4.1" >> "$GITHUB_ENV"
 
+      - name: Check recovery compatibility and persistent boot storage
+        run: |
+          status=0
+          python3 test/airoha/ubi_compat.py > regression.log 2>&1 || status=$?
+          python3 test/airoha/persistent_boot.py >> regression.log 2>&1 || status=$?
+          cat regression.log
+          printf '### Recovery and persistence checks\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
+          cat regression.log >> "$GITHUB_STEP_SUMMARY"
+          printf '\n~~~\n' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       - name: Build ${{ matrix.target }}
         env:
           CROSS_COMPILE: aarch64-linux-gnu-
@@ -52,7 +63,14 @@ jobs:
           BUILD_JOBS: 4
           AIROHA_SIGN_KEY: ${{ secrets.AIROHA_SIGN_KEY }}
           AIROHA_REQUIRE_SIGNING: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
-        run: sh ./scripts/build-an758x.sh "${{ matrix.target }}"
+        run: sh ./scripts/build-an758x.sh "${{ matrix.target }}" 2>&1 | tee build.log
+
+      - name: Record build result
+        if: always()
+        run: |
+          printf '### Device build result\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
+          test ! -f build.log || tail -n 80 build.log >> "$GITHUB_STEP_SUMMARY"
+          printf '\n~~~\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload ${{ matrix.target }}
         uses: actions/upload-artifact@v4
@@ -61,20 +79,88 @@ jobs:
           path: output/${{ matrix.target }}/an75*
           if-no-files-found: error
 
+  source:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply validation source when present
+        run: |
+          if test -f uboot-v2026.10-source.patch.gz; then
+            printf '%s  %s\n' 'abd00eaad506546c90ba03dc28d3322d34af7e9cb34b7c116d6b309ab09edf65' 'uboot-v2026.10-source.patch.gz' | sha256sum -c -
+            gzip -dc uboot-v2026.10-source.patch.gz > "$RUNNER_TEMP/source.patch"
+            git apply --check "$RUNNER_TEMP/source.patch"
+            git apply "$RUNNER_TEMP/source.patch"
+          fi
+          grep -q '^PATCHLEVEL = 10$' Makefile
+      - name: Package source, replacement files and complete patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, shutil, subprocess, zipfile
+          workflow = Path('.github/workflows/build.yml')
+          text = workflow.read_text()
+          marker = '      - name: Apply pinned v2026.10 source for validation\n'
+          if marker in text:
+              start = text.index(marker)
+              stop = text.index('      - name: Install build tools\n', start)
+              workflow.write_text(text[:start] + text[stop:])
+          payload = Path('uboot-v2026.10-source.patch.gz')
+          if payload.exists():
+              payload.unlink()
+          subprocess.run(['git', 'add', '-A'], check=True)
+          baseline = '23231c9a54f24340101280b1d86dbe14a6c2cd95'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          files = git('ls-files', '-z').decode().split('\0')[:-1]
+          assert 'test/airoha/ubi_compat.py' in files
+          assert 'test/airoha/persistent_boot.py' in files
+          assert 'docs/PERSISTENT-BOOT.md' in files
+          output = Path('deliverables')
+          output.mkdir()
+          (output / 'ONUBL-v2026.10.patch').write_bytes(git('diff', '--cached', '--binary', baseline))
+          deleted = git('diff', '--cached', '--name-only', '--diff-filter=D', baseline).decode()
+          (output / 'deleted-paths.txt').write_text(deleted)
+          changed = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB', '-z', baseline).decode().split('\0')[:-1]
+          for name in changed:
+              destination = output / 'replacement-files' / name
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(name, destination)
+          with zipfile.ZipFile(output / 'ONUBL-v2026.10-source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in files:
+                  if Path(name).is_file():
+                      archive.write(name, name)
+          manifest = {'baseline': baseline,
+                      'upstream': '5508406582f6f7120dce0c4b3059819a41788db2',
+                      'validated_commit': git('rev-parse', 'HEAD').decode().strip(),
+                      'source_tree': git('write-tree').decode().strip(),
+                      'changed_files': len(changed),
+                      'sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                 for p in output.iterdir() if p.is_file()}}
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ONUBL-v2026.10-source-and-replacements
+          path: deliverables/
+          include-hidden-files: true
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: an758x-*
           path: release
           merge-multiple: true
-
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}

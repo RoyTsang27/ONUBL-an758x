@@ -477,7 +477,7 @@ static int airoha_clk_enable(struct clk *clk)
 	struct airoha_clk_soc_data *data = priv->data;
 	int id = clk->id;
 
-	if (id > data->num_clocks)
+	if (id >= data->num_clocks)
 		return -EINVAL;
 
 	return 0;
@@ -499,7 +499,7 @@ static ulong airoha_clk_get_rate(struct clk *clk)
 	ulong rate;
 	int ret;
 
-	if (id > data->num_clocks) {
+	if (id >= data->num_clocks) {
 		dev_err(clk->dev, "Invalid clk ID %d\n", id);
 		return 0;
 	}
@@ -562,7 +562,7 @@ static ulong airoha_clk_set_rate(struct clk *clk, ulong rate)
 	int div;
 	int ret;
 
-	if (id > data->num_clocks) {
+	if (id >= data->num_clocks) {
 		dev_err(clk->dev, "Invalid clk ID %d\n", id);
 		return 0;
 	}
