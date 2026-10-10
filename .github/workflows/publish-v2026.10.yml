@@ -35,6 +35,7 @@ jobs:
           run-id: 38052804895
           github-token: ${{ github.token }}
           path: migration
+          merge-multiple: true
       - name: Commit exactly validated source to a new branch
         working-directory: target
         run: |
