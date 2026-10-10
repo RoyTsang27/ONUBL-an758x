@@ -10,6 +10,7 @@ Board-specific doc
    actions/index
    advantech/index
    andestech/index
+   alliedtelesis/index
    allwinner/index
    amlogic/index
    anbernic/index
@@ -18,7 +19,6 @@ Board-specific doc
    aspeed/index
    asus/index
    atmel/index
-   beacon/index
    beagle/index
    broadcom/index
    bsh/index

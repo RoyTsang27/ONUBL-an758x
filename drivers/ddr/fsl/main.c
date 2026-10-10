@@ -111,7 +111,7 @@ static int ddr_i2c_read(DEV_TYPE *dev, unsigned int addr,
 #if CONFIG_IS_ENABLED(DM_I2C)
 	ret = dm_i2c_read(dev, 0, buf, len);
 #else
-	ret = 0;
+	ret = i2c_read(dev->chip, addr, alen, buf, len);
 #endif
 
 	return ret;
@@ -221,7 +221,7 @@ void fsl_ddr_get_spd(generic_spd_eeprom_t *ctrl_dimms_spd,
 	unsigned int i2c_address = 0;
 
 	if (ctrl_num >= CONFIG_SYS_NUM_DDR_CTLRS) {
-		printf("%s unexpected ctrl_num = %u\n", __FUNCTION__, ctrl_num);
+		printf("%s unexpected ctrl_num = %u\n", __func__, ctrl_num);
 		return;
 	}
 

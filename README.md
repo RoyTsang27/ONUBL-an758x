@@ -4,6 +4,12 @@ U-Boot for Airoha AN7581/AN7583 with a bilingual Web recovery interface.
 
 面向 Airoha AN7581/AN7583 的 U-Boot，集成中英文 Web 恢复页面。
 
+Based on [U-Boot v2026.10](https://github.com/u-boot/u-boot/releases/tag/v2026.10)
+(`5508406582f6f7120dce0c4b3059819a41788db2`). See
+[upgrade notes](docs/UBOOT-V2026.10.md) for compatibility and validation details.
+
+基于 U-Boot v2026.10，保留全部 12 款设备的板级支持及 Web 恢复功能。
+
 Hold Reset about one second after power-on to enter Web recovery.
 
 上电约一秒后按住 Reset，即可进入 Web 恢复页面。
@@ -33,7 +39,7 @@ export ARM32_CROSS_COMPILE=/path/to/arm-none-eabi-
 export MBEDTLS_DIR=/path/to/mbedtls-3.4.1
 export BUILD_JOBS=$(nproc)
 
-./scripts/build-an758x.sh hg5585f-ct
+sh ./scripts/build-an758x.sh hg5585f-ct
 ```
 Artifacts are written to `output/<target>/` / 产物位于 `output/<target>/`
 

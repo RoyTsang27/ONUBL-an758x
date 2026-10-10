@@ -10,6 +10,26 @@
 #include <dm/device.h>
 #include <dm/pinctrl.h>
 
+/* GPIOs */
+#define REG_GPIO_CTRL				0x0000
+#define REG_GPIO_DATA				0x0004
+#define REG_GPIO_INT				0x0008
+#define REG_GPIO_INT_EDGE			0x000c
+#define REG_GPIO_INT_LEVEL			0x0010
+#define REG_GPIO_OE				0x0014
+#define REG_GPIO_CTRL1				0x0020
+#define REG_GPIO_CTRL2				0x0060
+#define REG_GPIO_CTRL3				0x0064
+#define REG_GPIO_DATA1				0x0070
+#define REG_GPIO_OE1				0x0078
+#define REG_GPIO_INT1				0x007c
+#define REG_GPIO_INT_EDGE1			0x0080
+#define REG_GPIO_INT_EDGE2			0x0084
+#define REG_GPIO_INT_EDGE3			0x0088
+#define REG_GPIO_INT_LEVEL1			0x008c
+#define REG_GPIO_INT_LEVEL2			0x0090
+#define REG_GPIO_INT_LEVEL3			0x0094
+
 #define AIROHA_NUM_PINS				64
 #define AIROHA_PIN_BANK_SIZE			(AIROHA_NUM_PINS / 2)
 #define AIROHA_REG_GPIOCTRL_NUM_PIN		(AIROHA_NUM_PINS / 4)
@@ -64,7 +84,7 @@ struct airoha_pinctrl_conf {
 	struct airoha_pinctrl_reg reg;
 };
 
-struct airoha_gpiochip_regs {
+struct airoha_pinctrl_gpiochip {
 	/* gpio */
 	const u32 *data;
 	const u32 *dir;
@@ -73,6 +93,8 @@ struct airoha_gpiochip_regs {
 	const u32 *status;
 	const u32 *level;
 	const u32 *edge;
+
+	u32 irq_type[AIROHA_NUM_PINS];
 };
 
 struct airoha_pinctrl_confs_info {
@@ -97,7 +119,8 @@ struct airoha_pinctrl {
 	struct regmap *regmap;
 
 	struct airoha_pinctrl_match_data *data;
-	struct airoha_gpiochip_regs *gpio_regs;
+
+	struct airoha_pinctrl_gpiochip gpiochip;
 };
 
 struct airoha_pinctrl_match_data {

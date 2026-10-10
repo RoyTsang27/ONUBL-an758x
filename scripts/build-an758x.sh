@@ -23,7 +23,7 @@ Optional environment:
 
 Tagged GitHub Actions builds set AIROHA_REQUIRE_SIGNING=1. For a local release:
   AIROHA_REQUIRE_SIGNING=1 AIROHA_SIGN_KEY_PATH=/secure/root.pem \
-    ./scripts/build-an758x.sh xg-040g-md
+    sh ./scripts/build-an758x.sh xg-040g-md
 EOF
 	exit 2
 }
