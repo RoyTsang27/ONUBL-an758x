@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   publish:
-    if: github.repository == 'RoyTsang27/ONUBL-an758x' && github.actor == 'RoyTsang27' && github.run_attempt == 1
+    if: false
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       - uses: actions/checkout@v4
