@@ -1,0 +1,76 @@
+name: Publish validated U-Boot v2026.10 source
+
+on:
+  push:
+    branches:
+      - codex/validate-v2026.10
+    paths:
+      - .github/workflows/publish-v2026.10.yml
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'RoyTsang27/ONUBL-an758x' && github.actor == 'RoyTsang27' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: target
+          fetch-depth: 0
+      - name: Verify pinned successful validation and artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api repos/RoyTsang27/ONUBL-an758x/actions/runs/38052804895 --jq '[.head_sha, .conclusion, .event, .path] | join(" ")')" = '215cbe36f5207a9c700b5fa93536ae0c31c4b6fe success push .github/workflows/build.yml'
+          test "$(gh api repos/RoyTsang27/ONUBL-an758x/actions/artifacts/11670416208 --jq '.digest')" = 'sha256:829e13db763ee490bc8aff80c7e5333943dc4f2be24e9a54d8ca38135bf7860a'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 11670416208
+          run-id: 38052804895
+          github-token: ${{ github.token }}
+          path: migration
+      - name: Commit exactly validated source to a new branch
+        working-directory: target
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, subprocess
+          baseline = '23231c9a54f24340101280b1d86dbe14a6c2cd95'
+          branch = 'refs/heads/codex/uboot-v2026.10'
+          def git(*args):
+              return subprocess.check_output(['git', *args]).decode().strip()
+          assert git('rev-parse', 'HEAD') == baseline, 'main changed; publication needs a fresh review'
+          assert not git('ls-remote', '--heads', 'origin', branch), 'destination already exists'
+          artifact = Path('../migration')
+          manifest = json.loads((artifact / 'manifest.json').read_text())
+          assert manifest['baseline'] == baseline
+          assert manifest['validated_commit'] == '215cbe36f5207a9c700b5fa93536ae0c31c4b6fe'
+          assert manifest['upstream'] == '5508406582f6f7120dce0c4b3059819a41788db2'
+          patch = artifact / 'ONUBL-v2026.10.patch'
+          assert hashlib.sha256(patch.read_bytes()).hexdigest() == manifest['sha256'][patch.name]
+          subprocess.run(['git', 'apply', '--check', '--index', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          assert git('write-tree') == manifest['source_tree'], 'source tree differs from validated artifact'
+          # The final build workflow is installed separately through GitHub's editor.
+          # This job only writes source files, and keeps main's workflow unchanged.
+          subprocess.run(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '.github/workflows/build.yml'], check=True)
+          changed = git('diff', '--cached', '--name-only').splitlines()
+          assert not any(p.startswith('.github/workflows/') for p in changed)
+          assert 'PATCHLEVEL = 10' in Path('Makefile').read_text().splitlines()
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'commit', '-m', 'Upgrade U-Boot base to v2026.10 and preserve AN758x recovery'], check=True)
+          # An empty lease atomically requires that the destination does not exist.
+          subprocess.run(['git', 'push', '--force-with-lease=' + branch + ':', 'origin', 'HEAD:' + branch], check=True)
+          print('Published validated source:', git('rev-parse', 'HEAD'))
+          PY
+      - name: Record publication
+        run: |
+          printf 'Validated source published to [codex/uboot-v2026.10](https://github.com/RoyTsang27/ONUBL-an758x/tree/codex/uboot-v2026.10). Main is unchanged.\n' >> "$GITHUB_STEP_SUMMARY"
