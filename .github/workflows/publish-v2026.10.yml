@@ -38,7 +38,7 @@ jobs:
       - name: Commit exactly validated source to a new branch
         working-directory: target
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY' > "$RUNNER_TEMP/publish.log" 2>&1
           from pathlib import Path
           import hashlib, json, subprocess
           baseline = '23231c9a54f24340101280b1d86dbe14a6c2cd95'
@@ -71,6 +71,9 @@ jobs:
           subprocess.run(['git', 'push', '--force-with-lease=' + branch + ':', 'origin', 'HEAD:' + branch], check=True)
           print('Published validated source:', git('rev-parse', 'HEAD'))
           PY
-      - name: Record publication
+      - name: Record publication result
+        if: always()
         run: |
-          printf 'Validated source published to [codex/uboot-v2026.10](https://github.com/RoyTsang27/ONUBL-an758x/tree/codex/uboot-v2026.10). Main is unchanged.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '### Publication result\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
+          test ! -f "$RUNNER_TEMP/publish.log" || tail -n 120 "$RUNNER_TEMP/publish.log" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n~~~\n' >> "$GITHUB_STEP_SUMMARY"
