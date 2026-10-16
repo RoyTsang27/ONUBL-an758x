@@ -10,7 +10,7 @@ usage: build-an758x.sh <hg5382a|hg5585f-ct|hg5585f-cu|hm2004-du|xg2010g|xr1710g|
 Required environment:
   CROSS_COMPILE         AArch64 toolchain prefix
   ARM32_CROSS_COMPILE   Arm bare-metal toolchain prefix for BL2
-  MBEDTLS_DIR           Mbed TLS 3.4.1 source directory
+  MBEDTLS_DIR           Mbed TLS 3.6.7 or later 3.6.x source directory
 
 Optional environment:
   BUILD_ROOT            Build workspace (default: <repo>/build)
@@ -44,6 +44,7 @@ output_root="$(CDPATH= cd -- "$output_root" && pwd)"
 : "${CROSS_COMPILE:?CROSS_COMPILE is required}"
 : "${ARM32_CROSS_COMPILE:?ARM32_CROSS_COMPILE is required}"
 : "${MBEDTLS_DIR:?MBEDTLS_DIR is required}"
+python3 "$script_dir/check-mbedtls.py" "$MBEDTLS_DIR"
 
 emmc=0
 
