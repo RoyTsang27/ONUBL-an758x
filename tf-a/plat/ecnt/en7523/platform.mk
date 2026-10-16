@@ -25,7 +25,7 @@ ARM_SECURE_BOOT_FLASH_KEY	:=	0
 endif
 AES						:=	none
 AES_FW					:=	none
-MBEDTLS_DIR				:=	../mbedtls-3.4.0
+MBEDTLS_DIR				:=	../mbedtls-3.6.7
 #MBEDTLS_DIR				:=	../mbedtls-2.18.0
 TESTFILE_NAME			:=	${BUILD_PLAT}/test.bin
 EFUSE_NAME				:=	${BUILD_PLAT}/ecntefuse.bin
