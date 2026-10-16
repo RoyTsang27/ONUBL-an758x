@@ -211,6 +211,7 @@ static void run_case(const unsigned char *stream, size_t size, uint bpix,
     memcpy(image + sizeof(bmp->header), stream, size);
     assert(video_display_rle8_bitmap(&device, bmp, bpix, palette,
                                     arena + 64 + cursor, 0, 0, 4, 4) == expected);
+    if (!expected) assert(arena[64 + cursor] != 0xa5);
     for (int i = 0; i < 64; i++) assert(arena[i] == 0xa5);
     for (int i = 128; i < 256; i++) assert(arena[i] == 0xa5);
 }
