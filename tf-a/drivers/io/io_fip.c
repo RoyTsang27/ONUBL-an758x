@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -34,7 +35,8 @@
 		x.node[4], x.node[5]
 
 typedef struct {
-	unsigned int file_pos;
+	size_t file_pos;
+	size_t fip_size;
 	fip_toc_entry_t entry;
 } fip_file_state_t;
 
@@ -46,6 +48,7 @@ typedef struct {
  */
 typedef struct {
 	uintptr_t dev_spec;
+	size_t fip_size;
 	uint16_t plat_toc_flag;
 } fip_dev_state_t;
 
@@ -245,9 +248,19 @@ static int fip_dev_init(io_dev_info_t *dev_info, const uintptr_t init_params)
 		goto fip_dev_init_exit;
 	}
 
+	result = io_size(backend_handle, &state->fip_size);
+	if (result != 0 || state->fip_size < sizeof(header)) {
+		result = -EIO;
+		goto fip_dev_init_close;
+	}
+
 	result = io_read(backend_handle, (uintptr_t)&header, sizeof(header),
 			&bytes_read);
 	if (result == 0) {
+		if (bytes_read != sizeof(header)) {
+			result = -EIO;
+			goto fip_dev_init_close;
+		}
 		if (!is_valid_header(&header)) {
 			WARN("Firmware Image Package header check failed.\n");
 			result = -ENOENT;
@@ -261,9 +274,14 @@ static int fip_dev_init(io_dev_info_t *dev_info, const uintptr_t init_params)
 		}
 	}
 
+ fip_dev_init_close:
 	io_close(backend_handle);
 
  fip_dev_init_exit:
+	if (result != 0) {
+		state->fip_size = 0;
+		state->plat_toc_flag = 0;
+	}
 	return result;
 }
 
@@ -289,6 +307,9 @@ static int fip_file_open(io_dev_info_t *dev_info, const uintptr_t spec,
 	const io_uuid_spec_t *uuid_spec = (io_uuid_spec_t *)spec;
 	static const uuid_t uuid_null = { {0} }; /* Double braces for clang */
 	size_t bytes_read;
+	size_t toc_offset = sizeof(fip_toc_header_t);
+	fip_dev_state_t *state = (fip_dev_state_t *)dev_info->info;
+	size_t fip_size = state->fip_size;
 	int found_file = 0;
 
 	assert(uuid_spec != NULL);
@@ -304,6 +325,9 @@ static int fip_file_open(io_dev_info_t *dev_info, const uintptr_t spec,
 		WARN("fip_file_open : Only one open file at a time.\n");
 		return -ENFILE;
 	}
+
+	if (fip_size < sizeof(fip_toc_header_t) + sizeof(fip_toc_entry_t))
+		return -EINVAL;
 
 	/* Attempt to access the FIP image */
 	result = io_open(backend_dev_handle, backend_image_spec,
@@ -325,11 +349,19 @@ static int fip_file_open(io_dev_info_t *dev_info, const uintptr_t spec,
 
 	found_file = 0;
 	do {
+		if (toc_offset > fip_size - sizeof(current_fip_file.entry)) {
+			result = -EINVAL;
+			goto fip_file_open_close;
+		}
 		result = io_read(backend_handle,
 				 (uintptr_t)&current_fip_file.entry,
 				 sizeof(current_fip_file.entry),
 				 &bytes_read);
 		if (result == 0) {
+			if (bytes_read != sizeof(current_fip_file.entry)) {
+				result = -EIO;
+				goto fip_file_open_close;
+			}
 			if (compare_uuids(&current_fip_file.entry.uuid,
 					  &uuid_spec->uuid) == 0) {
 				found_file = 1;
@@ -338,16 +370,27 @@ static int fip_file_open(io_dev_info_t *dev_info, const uintptr_t spec,
 			WARN("Failed to read FIP (%i)\n", result);
 			goto fip_file_open_close;
 		}
+		toc_offset += sizeof(current_fip_file.entry);
 	} while ((found_file == 0) &&
 			(compare_uuids(&current_fip_file.entry.uuid,
 				&uuid_null) != 0));
 
 	if (found_file == 1) {
+		uint64_t offset = current_fip_file.entry.offset_address;
+		uint64_t size = current_fip_file.entry.size;
+
+		/* Validate before narrowing the 64-bit ToC fields on AArch32. */
+		if (size == 0 || offset < toc_offset || offset >= fip_size ||
+		    size > fip_size - offset || offset > LLONG_MAX) {
+			result = -EINVAL;
+			goto fip_file_open_close;
+		}
 		/* All fine. Update entity info with file state and return. Set
 		 * the file position to 0. The 'current_fip_file.entry' holds
 		 * the base and size of the file.
 		 */
 		current_fip_file.file_pos = 0;
+		current_fip_file.fip_size = fip_size;
 		entity->info = (uintptr_t)&current_fip_file;
 	} else {
 		/* Did not find the file in the FIP. */
@@ -359,6 +402,8 @@ static int fip_file_open(io_dev_info_t *dev_info, const uintptr_t spec,
 	io_close(backend_handle);
 
  fip_file_open_exit:
+	if (result != 0)
+		zeromem(&current_fip_file, sizeof(current_fip_file));
 	return result;
 }
 
@@ -381,13 +426,26 @@ static int fip_file_read(io_entity_t *entity, uintptr_t buffer, size_t length,
 {
 	int result;
 	fip_file_state_t *fp;
-	size_t file_offset;
+	uint64_t file_offset;
 	size_t bytes_read;
 	uintptr_t backend_handle;
 
 	assert(entity != NULL);
 	assert(length_read != NULL);
 	assert(entity->info != (uintptr_t)NULL);
+
+	*length_read = 0;
+	fp = (fip_file_state_t *)entity->info;
+	if (fp->file_pos > fp->entry.size ||
+	    length > fp->entry.size - fp->file_pos)
+		return -EINVAL;
+	file_offset = fp->entry.offset_address + fp->file_pos;
+	if (file_offset < fp->entry.offset_address ||
+	    file_offset > fp->fip_size || file_offset > LLONG_MAX ||
+	    length > fp->fip_size - file_offset)
+		return -EINVAL;
+	if (length == 0)
+		return 0;
 
 	/* Open the backend, attempt to access the blob image */
 	result = io_open(backend_dev_handle, backend_image_spec,
@@ -401,7 +459,6 @@ static int fip_file_read(io_entity_t *entity, uintptr_t buffer, size_t length,
 	fp = (fip_file_state_t *)entity->info;
 
 	/* Seek to the position in the FIP where the payload lives */
-	file_offset = fp->entry.offset_address + fp->file_pos;
 	result = io_seek(backend_handle, IO_SEEK_SET,
 			 (signed long long)file_offset);
 	if (result != 0) {
@@ -415,6 +472,9 @@ static int fip_file_read(io_entity_t *entity, uintptr_t buffer, size_t length,
 		/* We cannot read our data. Fail. */
 		WARN("Failed to read payload (%i)\n", result);
 		result = -ENOENT;
+		goto fip_file_read_close;
+	} else if (bytes_read != length) {
+		result = -EIO;
 		goto fip_file_read_close;
 	} else {
 		/* Set caller length and new file position. */
