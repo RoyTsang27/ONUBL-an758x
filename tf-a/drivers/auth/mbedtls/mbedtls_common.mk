@@ -75,6 +75,7 @@ else ifeq (${MBEDTLS_MAJOR}, 3)
 						rsa_alt_helpers.c	\
 						bignum_mod.c \
 						bignum_mod_raw.c \
+						pk_ecc.c			\
 						ecp_curves_new.c		\
 						)
 
