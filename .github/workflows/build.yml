@@ -135,6 +135,12 @@ jobs:
               destination = output / 'security-replacement-files' / name
               destination.parent.mkdir(parents=True, exist_ok=True)
               shutil.copyfile(name, destination)
+          subprocess.run(['git', 'apply', '--reverse', '--check',
+                          str(output / 'ONUBL-CVE-2026-10-17.patch')], check=True)
+          with zipfile.ZipFile(output / 'ONUBL-CVE-2026-10-17-replacements.zip',
+                               'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in security_files:
+                  archive.write(name, name)
           changed = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB', '-z', baseline).decode().split('\0')[:-1]
           for name in changed:
               destination = output / 'replacement-files' / name
