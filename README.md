@@ -36,11 +36,15 @@ Hold Reset about one second after power-on to enter Web recovery.
 ```sh
 export CROSS_COMPILE=/path/to/aarch64-linux-musl-
 export ARM32_CROSS_COMPILE=/path/to/arm-none-eabi-
-export MBEDTLS_DIR=/path/to/mbedtls-3.4.1
+export MBEDTLS_DIR=/path/to/mbedtls-3.6.7
 export BUILD_JOBS=$(nproc)
 
 sh ./scripts/build-an758x.sh hg5585f-ct
 ```
+
+TF-A builds require Mbed TLS 3.6.7 or a later 3.6.x security release.
+See the [CVE review](docs/SECURITY-2026-10-17.md) for fixes and feature applicability.
+TF-A 构建需使用 Mbed TLS 3.6.7 或更新的 3.6.x 安全版本；详见 CVE 审查记录。
 Artifacts are written to `output/<target>/` / 产物位于 `output/<target>/`
 
 ## Installation / 刷入
