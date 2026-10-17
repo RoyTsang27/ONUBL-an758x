@@ -41,15 +41,18 @@ jobs:
 
       - name: Download Mbed TLS
         run: |
-          curl -L https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.4.1.tar.gz |
-            tar -xz
-          echo "MBEDTLS_DIR=$PWD/mbedtls-3.4.1" >> "$GITHUB_ENV"
+          curl -fL --retry 3 -o mbedtls.tar.bz2 https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+          printf '%s  %s\n' 'a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6' 'mbedtls.tar.bz2' | sha256sum -c -
+          mkdir mbedtls-3.6.7
+          tar -xjf mbedtls.tar.bz2 --strip-components=1 -C mbedtls-3.6.7
+          echo "MBEDTLS_DIR=$PWD/mbedtls-3.6.7" >> "$GITHUB_ENV"
 
       - name: Check recovery compatibility and persistent boot storage
         run: |
           status=0
           python3 test/airoha/ubi_compat.py > regression.log 2>&1 || status=$?
           python3 test/airoha/persistent_boot.py >> regression.log 2>&1 || status=$?
+          python3 test/airoha/cve_regressions.py >> regression.log 2>&1 || status=$?
           cat regression.log
           printf '### Recovery and persistence checks\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
           cat regression.log >> "$GITHUB_STEP_SUMMARY"
@@ -123,6 +126,21 @@ jobs:
           (output / 'ONUBL-v2026.10.patch').write_bytes(git('diff', '--cached', '--binary', baseline))
           deleted = git('diff', '--cached', '--name-only', '--diff-filter=D', baseline).decode()
           (output / 'deleted-paths.txt').write_text(deleted)
+          security_base = 'a0c8ee0615d94d4fe407d607cee2cf8496e41d0c'
+          (output / 'ONUBL-CVE-2026-10-17.patch').write_bytes(
+              git('diff', '--cached', '--binary', security_base))
+          security_files = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB',
+                               '-z', security_base).decode().split('\0')[:-1]
+          for name in security_files:
+              destination = output / 'security-replacement-files' / name
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(name, destination)
+          subprocess.run(['git', 'apply', '--reverse', '--check',
+                          str(output / 'ONUBL-CVE-2026-10-17.patch')], check=True)
+          with zipfile.ZipFile(output / 'ONUBL-CVE-2026-10-17-replacements.zip',
+                               'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in security_files:
+                  archive.write(name, name)
           changed = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB', '-z', baseline).decode().split('\0')[:-1]
           for name in changed:
               destination = output / 'replacement-files' / name
@@ -133,6 +151,8 @@ jobs:
                   if Path(name).is_file():
                       archive.write(name, name)
           manifest = {'baseline': baseline,
+                      'security_baseline': security_base,
+                      'security_review_date': '2026-10-17',
                       'upstream': '5508406582f6f7120dce0c4b3059819a41788db2',
                       'validated_commit': git('rev-parse', 'HEAD').decode().strip(),
                       'source_tree': git('write-tree').decode().strip(),

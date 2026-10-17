@@ -73,7 +73,10 @@ else ifeq (${MBEDTLS_MAJOR}, 3)
 						constant_time.c		\
 						bignum_core.c		\
 						rsa_alt_helpers.c	\
-						hash_info.c		\
+						bignum_mod.c \
+						bignum_mod_raw.c \
+						pk_ecc.c			\
+						ecp_curves_new.c		\
 						)
 
 	# Currently on Mbedtls-3 there is outstanding bug due to usage
