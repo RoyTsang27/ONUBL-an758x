@@ -270,6 +270,23 @@ if [ "$parallel_nand" -eq 1 ]; then
 		"$packaged/$artifact_prefix-firstblock.bin"
 fi
 
+# Hash the exact packaged images; use basenames so verification works after download.
+python3 - "$packaged" "$artifact_prefix" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
+
+packaged = Path(sys.argv[1])
+prefix = sys.argv[2]
+images = sorted(p for p in packaged.iterdir()
+                if p.is_file() and p.name.startswith(prefix)
+                and p.suffix in ('.bin', '.fip'))
+assert images, 'no packaged images to checksum'
+(packaged / (prefix + '-SHA256SUMS')).write_text(''.join(
+    hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n'
+    for p in images))
+PY
+
 cp "$packaged/"* "$board_output/"
 
 printf 'Artifacts written to %s\n' "$board_output"
