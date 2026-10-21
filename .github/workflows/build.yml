@@ -30,6 +30,8 @@ jobs:
           - xg-040g-md
           - xg-040g-tf
           - xg-040g-mf
+          - xg-140g-tf
+          - xg-140g-tf-s
           - hm2004-du
 
     steps:
@@ -55,10 +57,12 @@ jobs:
 
       - name: Check recovery compatibility and persistent boot storage
         run: |
+          sh -n scripts/build-an758x.sh scripts/sign-an758x-fip.sh
           status=0
           python3 test/airoha/ubi_compat.py > regression.log 2>&1 || status=$?
           python3 test/airoha/persistent_boot.py >> regression.log 2>&1 || status=$?
           python3 test/airoha/cve_regressions.py >> regression.log 2>&1 || status=$?
+          python3 test/airoha/recovery_security.py >> regression.log 2>&1 || status=$?
           cat regression.log
           printf '### Recovery and persistence checks\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
           cat regression.log >> "$GITHUB_STEP_SUMMARY"
@@ -80,6 +84,11 @@ jobs:
           printf '### Device build result\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
           test ! -f build.log || tail -n 80 build.log >> "$GITHUB_STEP_SUMMARY"
           printf '\n~~~\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check compiled XG-140G board identity
+        run: |
+          python3 test/airoha/xg140g_board.py "${{ matrix.target }}" | tee board-check.log
+          cat board-check.log >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload ${{ matrix.target }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -157,9 +166,24 @@ jobs:
               for name in files:
                   if Path(name).is_file():
                       archive.write(name, name)
+          review_base = '82e2595b6d0f6e5343e066809f494e09bc114b40'
+          review_patch = output / 'ONUBL-2026-10-21.patch'
+          review_patch.write_bytes(git('diff', '--cached', '--binary', review_base))
+          review_files = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB',
+                             '-z', review_base).decode().split('\0')[:-1]
+          with zipfile.ZipFile(output / 'ONUBL-2026-10-21-replacements.zip',
+                               'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in review_files:
+                  archive.write(name, name)
+                  destination = output / '2026-10-21-replacement-files' / name
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(name, destination)
+          subprocess.run(['git', 'apply', '--reverse', '--check', str(review_patch)], check=True)
           manifest = {'baseline': baseline,
                       'security_baseline': security_base,
-                      'security_review_date': '2026-10-17',
+                      'security_review_date': '2026-10-21',
+                      'review_baseline': review_base,
+                      'review_changed_files': review_files,
                       'upstream': '5508406582f6f7120dce0c4b3059819a41788db2',
                       'validated_commit': git('rev-parse', 'HEAD').decode().strip(),
                       'source_tree': git('write-tree').decode().strip(),
@@ -183,7 +207,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: an758x-*
           path: release
