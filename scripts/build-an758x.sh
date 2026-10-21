@@ -5,7 +5,7 @@ set -eu
 usage()
 {
 	cat >&2 <<'EOF'
-usage: build-an758x.sh <hg5382a|hg5585f-ct|hg5585f-cu|hm2004-du|xg2010g|xr1710g|zn504xg-d|zn515xg-d|ung00a|xg-040g-md|xg-040g-tf|xg-040g-mf>
+usage: build-an758x.sh <hg5382a|hg5585f-ct|hg5585f-cu|hm2004-du|xg2010g|xr1710g|zn504xg-d|zn515xg-d|ung00a|xg-040g-md|xg-040g-tf|xg-040g-mf|xg-140g-tf|xg-140g-tf-s>
 
 Required environment:
   CROSS_COMPILE         AArch64 toolchain prefix
@@ -20,6 +20,8 @@ Optional environment:
   AIROHA_SIGN_KEY        RSA-4096 PEM private-key contents
   AIROHA_REQUIRE_SIGNING 0 allows unsigned development builds (default);
                         1 requires a signing key and successful FIP signing
+
+XG-140G-TF and TF-S are experimental, separate targets; see docs/XG-140G-TF.md.
 
 Tagged GitHub Actions builds set AIROHA_REQUIRE_SIGNING=1. For a local release:
   AIROHA_REQUIRE_SIGNING=1 AIROHA_SIGN_KEY_PATH=/secure/root.pem \
@@ -112,6 +114,18 @@ xg-040g-md)
 xg-040g-tf)
 	defconfig=an7581_nokia_xg-040g-tf_defconfig
 	artifact_prefix=an7581-nokia-xg-040g-tf
+	soc=EN7581
+	parallel_nand=0
+	;;
+xg-140g-tf)
+	defconfig=an7581_nokia_xg-140g-tf_defconfig
+	artifact_prefix=an7581-nokia-xg-140g-tf-experimental
+	soc=EN7581
+	parallel_nand=0
+	;;
+xg-140g-tf-s)
+	defconfig=an7581_nokia_xg-140g-tf-s_defconfig
+	artifact_prefix=an7581-nokia-xg-140g-tf-s-experimental
 	soc=EN7581
 	parallel_nand=0
 	;;
