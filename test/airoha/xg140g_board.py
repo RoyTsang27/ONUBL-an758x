@@ -36,8 +36,12 @@ def main():
                  'an7581-nokia-' + target + '-experimental-preloader.bin',
                  'an7581-nokia-' + target + '-experimental-bl31-u-boot.fip',
                  'nokia_' + target + '-ubi-squashfs-sysupgrade.itb',
-                 'boot_recovery_auto=', 'httpd safe'):
+                 'boot_recovery_auto='):
         assert text in environment, text
+    variables = dict(entry.split('=', 1) for entry in environment.split('\0')
+                     if '=' in entry)
+    assert variables['boot_recovery'] == 'httpd dhcp'
+    assert variables['boot_recovery_auto'] == 'httpd dhcp safe'
     other = 'xg-140g-tf' if target.endswith('-s') else 'xg-140g-tf-s'
     assert ('nokia,' + other + '-ubi') not in prop('/', 'compatible').split()
     prefix = 'an7581-nokia-' + target + '-experimental'
