@@ -8,7 +8,7 @@ Based on [U-Boot v2026.10](https://github.com/u-boot/u-boot/releases/tag/v2026.1
 (`5508406582f6f7120dce0c4b3059819a41788db2`). See
 [upgrade notes](docs/UBOOT-V2026.10.md) for compatibility and validation details.
 
-基于 U-Boot v2026.10，保留全部 12 款设备的板级支持及 Web 恢复功能。
+基于 U-Boot v2026.10，保留原有 12 款设备的板级支持及 Web 恢复功能，并新增两款 XG-140G 实验性目标。
 
 Hold Reset about one second after power-on to enter Web recovery.
 
@@ -31,6 +31,19 @@ Hold Reset about one second after power-on to enter Web recovery.
 | `xg-040g-tf` | Nokia XG-040G-TF | AN7581 | SPI NAND |
 | `xg-040g-mf` | Nokia XG-040G-MF | AN7583 | SPI NAND |
 
+The two XG-140G targets below are **experimental and have not been boot-tested**.
+Use the exact model target; TF and TF-S images are not interchangeable.
+Read [hardware evidence and installation limits](docs/XG-140G-TF.md) before using them.
+
+| Experimental target / 实验性目标 | Device | SoC | Storage |
+| --- | --- | --- | --- |
+| `xg-140g-tf` | Nokia XG-140G-TF | AN7581DT | 256 MiB SPI NAND (public reference) |
+| `xg-140g-tf-s` | Nokia XG-140G-TF-S | AN7581DT | S35ML02G3 256 MiB SPI NAND (stock TTL log) |
+
+实验性目标尚未真机启动验证，TF 与 TF-S 镜像不可互换；请先阅读上述硬件与安装限制。
+
+See the [2026-10-21 security and dependency review](docs/SECURITY-2026-10-21.md).
+
 ## Build / 构建
 
 ```sh
@@ -48,6 +61,12 @@ TF-A 构建需使用 Mbed TLS 3.6.7 或更新的 3.6.x 安全版本；详见 CVE
 Artifacts are written to `output/<target>/` / 产物位于 `output/<target>/`
 
 ## Installation / 刷入
+
+**XG-140G-TF / TF-S:** the generic instructions below are not a qualified
+stock-to-UBI conversion procedure for these new boards. Follow the
+[experimental board notes](docs/XG-140G-TF.md); verify boot-ROM acceptance,
+GPIOs, Ethernet and a complete backup before any permanent write.
+
 
 ### Automatic / 自动刷机
 
