@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the actual built DTB/config/environment for each experimental model."""
 from pathlib import Path
+import hashlib
 import subprocess
 import sys
 
@@ -45,8 +46,18 @@ def main():
     other = 'xg-140g-tf' if target.endswith('-s') else 'xg-140g-tf-s'
     assert ('nokia,' + other + '-ubi') not in prop('/', 'compatible').split()
     prefix = 'an7581-nokia-' + target + '-experimental'
-    for suffix in ('-preloader.bin', '-firstblock.bin', '-bl31-u-boot.fip'):
+    for suffix in ('-preloader.bin', '-bl31-u-boot.fip'):
         assert (dtb.parent / (prefix + suffix)).stat().st_size > 0
+    checksums = (dtb.parent / (prefix + '-SHA256SUMS')).read_text().splitlines()
+    expected = {prefix + '-preloader.bin', prefix + '-bl31-u-boot.fip'}
+    actual = set()
+    for line in checksums:
+        digest, name = line.split('  ', 1)
+        assert name in expected, name
+        assert name not in actual, name
+        assert hashlib.sha256((dtb.parent / name).read_bytes()).hexdigest() == digest
+        actual.add(name)
+    assert actual == expected
     print('PASS: ' + target + ' compiled DTB, config, recovery environment and artifact identity; hardware untested')
 
 
