@@ -81,6 +81,11 @@ int load_auth_image(uint32_t id, image_info_t *info)
 }
 /* The runner appends the actual vendor handler definitions here. */
 #include "vendor_handlers.inc"
+typedef struct { unsigned int held; } spinlock_t;
+static void spin_lock(spinlock_t *lock) { CHECK(lock->held==0); lock->held=1; }
+static void spin_unlock(spinlock_t *lock) { CHECK(lock->held==1); lock->held=0; }
+typedef uintptr_t u_register_t;
+#include "vendor_dispatch.inc"
 
 static void derive(const char *user, const char *password, unsigned int hash,
                    unsigned int iterations, unsigned int length, unsigned char *out)
@@ -198,6 +203,9 @@ static void password_tests(void)
     CHECK(ecnt_mbedtls_pkcs5_pbkdf2_compare("u",1,"p",1,expected,0,32,256)!=0);
     CHECK(ecnt_mbedtls_pkcs5_pbkdf2_compare("u",1,"p",1,expected,2,32,123)!=0);
     uintptr_t base; size_t size;
+    CHECK(ecnt_crypto_call(ECNT_SIP_DCRYPT_GCM_F1_HANDLE,0x81000000U,43,0)!=0);
+    CHECK(ecnt_crypto_call(ECNT_SIP_DCRYPT_GCM_F1_HANDLE,0xfffffff0U,UINT_MAX,0)!=0);
+    CHECK(crypto_lock.held==0 && active_maps==0);
     CHECK(ecnt_ns_window(0x81000ff9U,640,&base,&size));
     CHECK(base==0x81000000U && size==8192);
     CHECK(!ecnt_ns_window(0x80003000U,16,&base,&size));
@@ -241,6 +249,12 @@ static void password_tests(void)
     CHECK(active_maps==0);
     CHECK(ecnt_decrypt_dm_key_handler(0x81000000U,16,0)==0);
     CHECK(active_maps==0);
+    unsigned char sample[17]={1,2,3};
+    encrypt_image(unaligned,sample,sizeof(sample));
+    CHECK(ecnt_crypto_call(ECNT_SIP_DCRYPT_GCM_F1_HANDLE,
+        (uintptr_t)unaligned,sizeof(struct fw_enc_hdr)+sizeof(sample),0)==0);
+    CHECK(memcmp(unaligned,sample,sizeof(sample))==0);
+    CHECK(crypto_lock.held==0 && active_maps==0);
     CHECK(munmap(shared,12288)==0);
 #endif
 }
