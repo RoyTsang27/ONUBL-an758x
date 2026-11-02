@@ -55,7 +55,7 @@ jobs:
           tar -xjf mbedtls.tar.bz2 --strip-components=1 -C mbedtls-3.6.7
           echo "MBEDTLS_DIR=$PWD/mbedtls-3.6.7" >> "$GITHUB_ENV"
 
-      - name: Check recovery compatibility and persistent boot storage
+      - name: Check recovery, persistence and TF-A security
         run: |
           sh -n scripts/build-an758x.sh scripts/sign-an758x-fip.sh
           status=0
@@ -63,8 +63,9 @@ jobs:
           python3 test/airoha/persistent_boot.py >> regression.log 2>&1 || status=$?
           python3 test/airoha/cve_regressions.py >> regression.log 2>&1 || status=$?
           python3 test/airoha/recovery_security.py >> regression.log 2>&1 || status=$?
+          python3 test/airoha/tfa_crypto_security.py >> regression.log 2>&1 || status=$?
           cat regression.log
-          printf '### Recovery and persistence checks\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '### Recovery, persistence and TF-A security checks\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
           cat regression.log >> "$GITHUB_STEP_SUMMARY"
           printf '\n~~~\n' >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
@@ -166,22 +167,22 @@ jobs:
               for name in files:
                   if Path(name).is_file():
                       archive.write(name, name)
-          review_base = '82e2595b6d0f6e5343e066809f494e09bc114b40'
-          review_patch = output / 'ONUBL-2026-10-21.patch'
+          review_base = 'bd6434bf2a8ae249df25beebdf95743017bd2630'
+          review_patch = output / 'ONUBL-2026-11-03.patch'
           review_patch.write_bytes(git('diff', '--cached', '--binary', review_base))
           review_files = git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB',
                              '-z', review_base).decode().split('\0')[:-1]
-          with zipfile.ZipFile(output / 'ONUBL-2026-10-21-replacements.zip',
+          with zipfile.ZipFile(output / 'ONUBL-2026-11-03-replacements.zip',
                                'w', zipfile.ZIP_DEFLATED) as archive:
               for name in review_files:
                   archive.write(name, name)
-                  destination = output / '2026-10-21-replacement-files' / name
+                  destination = output / '2026-11-03-replacement-files' / name
                   destination.parent.mkdir(parents=True, exist_ok=True)
                   shutil.copyfile(name, destination)
           subprocess.run(['git', 'apply', '--reverse', '--check', str(review_patch)], check=True)
           manifest = {'baseline': baseline,
                       'security_baseline': security_base,
-                      'security_review_date': '2026-10-21',
+                      'security_review_date': '2026-11-03',
                       'review_baseline': review_base,
                       'review_changed_files': review_files,
                       'upstream': '5508406582f6f7120dce0c4b3059819a41788db2',
