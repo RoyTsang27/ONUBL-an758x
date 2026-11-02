@@ -7,6 +7,8 @@
 #define ECNT_PLAT_COMMON_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <ecnt_smc_security.h>
 
 #include <common/bl_common.h>
 #include <common/param_header.h>
@@ -92,7 +94,10 @@ uint64_t ecnt_password_verify_handler(uint32_t r1, uint32_t r2, uint32_t r3);
 uint64_t ecnt_decrypt_dm_key_handler(uint32_t r1, uint32_t r2, uint32_t r3);
 
 #if defined(IMAGE_BL31)
-int ecnt_mbedtls_pkcs5_pbkdf2_compare (char *account, char *password, unsigned char *login_auth, unsigned int iter_time, unsigned int key_length, unsigned int hash_algo);
+int ecnt_mbedtls_pkcs5_pbkdf2_compare(const char *account, size_t account_len,
+		const char *password, size_t password_len,
+		const unsigned char *login_auth, unsigned int iterations,
+		unsigned int key_length, unsigned int hash_algo);
 #endif
 
 uint64_t ecnt_avs_handler(uint32_t r1, uint32_t r2, uint32_t r3);
