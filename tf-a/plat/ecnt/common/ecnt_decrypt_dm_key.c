@@ -1,213 +1,149 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
 #include <errno.h>
+#include <stdint.h>
+#include <string.h>
 #include <common/debug.h>
 #include <plat/common/platform.h>
-#include <tools_share/firmware_image_package.h>
 #include <tools_share/firmware_encrypted.h>
-#include <mbedtls/aes.h>
 #include <drivers/auth/crypto_mod.h>
 #include <drivers/auth/mbedtls/mbedtls_common.h>
-#include <drivers/auth/mbedtls/mbedtls_config-3.h>
-
-/* mbed TLS headers */
+#include <mbedtls/aes.h>
+#include <mbedtls/constant_time.h>
 #include <mbedtls/gcm.h>
-#include <mbedtls/md.h>
-#include <mbedtls/memory_buffer_alloc.h>
-#include <mbedtls/oid.h>
-#include <mbedtls/platform.h>
-#include <mbedtls/version.h>
-#include <mbedtls/x509.h>
+#include <mbedtls/platform_util.h>
 
-#define DEC_OP_BUF_SIZE		256
-#define ENC_KEY_SIZE		256
-#define AIROHA_KEY_SIZE		32
+#define DEC_OP_BUF_SIZE 256U
+#define AIROHA_KEY_SIZE 32U
 
-int decrypt_dm_key(uint8_t *p_buf, unsigned int size){
-	enum fw_enc_status_t fw_enc_status;
+static int valid_aes_key_size(size_t size)
+{
+	return size == 16U || size == 24U || size == 32U;
+}
+
+int decrypt_dm_key(uint8_t *buffer, unsigned int size)
+{
 	mbedtls_aes_context ctx;
-	uint8_t enc_key[ENC_KEY_SIZE], airoha_key[AIROHA_KEY_SIZE], decrypt_key_buf[DEC_OP_BUF_SIZE];
-	size_t airoha_key_len = AIROHA_KEY_SIZE;
-	int i, rc;
-	unsigned int key_flags = 0;
+	uint8_t encrypted[DEC_OP_BUF_SIZE], decrypted[DEC_OP_BUF_SIZE];
+	uint8_t key[AIROHA_KEY_SIZE] = {0};
+	size_t key_len = sizeof(key), offset;
+	unsigned int flags = 0;
+	int rc = CRYPTO_ERR_DECRYPTION;
 
-	memcpy(enc_key, p_buf, size);
-
-	fw_enc_status = 0;
-	plat_get_enc_key_info(fw_enc_status, airoha_key, &airoha_key_len, &key_flags, 0, 0);
+	if (buffer == NULL || size == 0U || size > sizeof(encrypted) ||
+	    size % 16U != 0U)
+		return CRYPTO_ERR_DECRYPTION;
 
 	mbedtls_aes_init(&ctx);
-	rc = mbedtls_aes_setkey_dec(&ctx, airoha_key, airoha_key_len * 8);
-	if (rc != 0) {
-		printf("SETKEY Failed\n");
-		rc = -1;
-		goto exit_aes;
+	memcpy(encrypted, buffer, size);
+	if (plat_get_enc_key_info(FW_ENC_WITH_SSK, key, &key_len, &flags,
+				  0, 0) != 0 || !valid_aes_key_size(key_len))
+		goto out;
+	if (mbedtls_aes_setkey_dec(&ctx, key, key_len * 8U) != 0)
+		goto out;
+	for (offset = 0; offset < size; offset += 16U) {
+		if (mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_DECRYPT,
+					encrypted + offset, decrypted + offset) != 0)
+			goto out;
 	}
-
-	for(i = 0; i < size; i += 16)
-		mbedtls_aes_crypt_ecb(&ctx, MBEDTLS_AES_DECRYPT, (enc_key + i), (decrypt_key_buf + i));
-
-	/* AES decryption success */
+	/* Do not expose partial output or write beyond the supplied length. */
+	memcpy(buffer, decrypted, size);
 	rc = CRYPTO_SUCCESS;
-
-	memcpy(p_buf, decrypt_key_buf, DEC_OP_BUF_SIZE);
-	printf("decryption success\n");
-
-exit_aes:
+out:
 	mbedtls_aes_free(&ctx);
+	mbedtls_platform_zeroize(key, sizeof(key));
+	mbedtls_platform_zeroize(encrypted, sizeof(encrypted));
+	mbedtls_platform_zeroize(decrypted, sizeof(decrypted));
 	return rc;
 }
 
-static inline int _is_valid_header(struct fw_enc_hdr *header)
-{
-	if (header->magic == ENC_HEADER_MAGIC)
-		return 1;
-	else
-		return 0;
-}
-
-void _dump_raw (unsigned char* p, int len){
-	int i=0;
-	
-	printf(" ----------------------start dump\n");
-	for (i=0;i<len;i++){
-		printf("0x%x \n", *(p+i));
-	}
-	printf(" ----------------------finish dump\n");
-	
-	return ;
-}
-
-int aes_gcm_decrypt(void *data_ptr, size_t len, const void *key,
-			   unsigned int key_len, const void *iv,
-			   unsigned int iv_len, const void *tag,
-			   unsigned int tag_len)
+int aes_gcm_decrypt(void *data, size_t len, const void *key,
+		    unsigned int key_len, const void *iv,
+		    unsigned int iv_len, const void *tag,
+		    unsigned int tag_len)
 {
 	mbedtls_gcm_context ctx;
-	mbedtls_cipher_id_t cipher = MBEDTLS_CIPHER_ID_AES;
-	unsigned char buf[DEC_OP_BUF_SIZE];
-	unsigned char tag_buf[16];
-	unsigned char *pt = data_ptr;
-	size_t dec_len;
-	int diff, i, rc;
-	size_t output_length ;
+	unsigned char output[DEC_OP_BUF_SIZE + 16U], computed_tag[16];
+	unsigned char expected_tag[16], nonce[ENC_MAX_IV_SIZE];
+	unsigned char *bytes = data;
+	size_t consumed = 0, produced = 0, chunk, written;
+	int rc = CRYPTO_ERR_DECRYPTION;
 
+	/* Format 1, produced by encrypt_fw, always carries a full 128-bit tag. */
+	if (data == NULL || key == NULL || iv == NULL || tag == NULL ||
+	    !valid_aes_key_size(key_len) || iv_len == 0U ||
+	    iv_len > sizeof(nonce) || tag_len != sizeof(expected_tag))
+		return CRYPTO_ERR_DECRYPTION;
+	memcpy(expected_tag, tag, sizeof(expected_tag));
+	memcpy(nonce, iv, iv_len);
 	mbedtls_gcm_init(&ctx);
+	if (mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key,
+			       key_len * 8U) != 0 ||
+	    mbedtls_gcm_starts(&ctx, MBEDTLS_GCM_DECRYPT, nonce, iv_len) != 0)
+		goto out;
 
-	rc = mbedtls_gcm_setkey(&ctx, cipher, key, key_len * 8);
-	if (rc != 0) {
-		rc = CRYPTO_ERR_DECRYPTION;
-		goto exit_gcm;
+	while (consumed < len) {
+		chunk = len - consumed;
+		if (chunk > DEC_OP_BUF_SIZE)
+			chunk = DEC_OP_BUF_SIZE;
+		if (mbedtls_gcm_update(&ctx, bytes + consumed, chunk, output,
+				       sizeof(output), &written) != 0)
+			goto out;
+		consumed += chunk;
+		/* Support both immediate and buffered Mbed TLS 3.6 output. */
+		if (written > sizeof(output) || written > consumed - produced)
+			goto out;
+		memcpy(bytes + produced, output, written);
+		produced += written;
 	}
-
-	rc = mbedtls_gcm_starts(&ctx, MBEDTLS_GCM_DECRYPT, iv, iv_len);
-	
-	if (rc != 0) {
-		rc = CRYPTO_ERR_DECRYPTION;
-		goto exit_gcm;
-	}
-
-	while (len > 0) {
-		dec_len = MIN(sizeof(buf), len);
-
-		rc = mbedtls_gcm_update(&ctx, pt, dec_len, buf, sizeof(buf), &output_length);
-
-		if (rc != 0) {
-			rc = CRYPTO_ERR_DECRYPTION;
-			goto exit_gcm;
-		}
-
-		memcpy(pt, buf, dec_len);
-		pt += dec_len;
-		len -= dec_len;
-	}
-
-	rc = mbedtls_gcm_finish(&ctx, NULL, 0, &output_length, tag_buf, sizeof(tag_buf));
-
-	if (rc != 0) {
-		rc = CRYPTO_ERR_DECRYPTION;
-		goto exit_gcm;
-	}
-
-	/* Check tag in "constant-time" */
-	for (diff = 0, i = 0; i < tag_len; i++)
-		diff |= ((const unsigned char *)tag)[i] ^ tag_buf[i];
-
-	if (diff != 0) {
-		rc = CRYPTO_ERR_DECRYPTION;
-		goto exit_gcm;
-	}
-
-	/* GCM decryption success */
+	if (mbedtls_gcm_finish(&ctx, output, sizeof(output), &written,
+			       computed_tag, sizeof(computed_tag)) != 0 ||
+	    written > sizeof(output) || written != len - produced)
+		goto out;
+	memcpy(bytes + produced, output, written);
+	if (mbedtls_ct_memcmp(expected_tag, computed_tag,
+			      sizeof(expected_tag)) != 0)
+		goto out;
 	rc = CRYPTO_SUCCESS;
-
-exit_gcm:
+out:
+	/* An authentication/backend failure must not leave usable plaintext. */
+	if (rc != CRYPTO_SUCCESS)
+		mbedtls_platform_zeroize(data, len);
 	mbedtls_gcm_free(&ctx);
+	mbedtls_platform_zeroize(output, sizeof(output));
+	mbedtls_platform_zeroize(computed_tag, sizeof(computed_tag));
+	mbedtls_platform_zeroize(expected_tag, sizeof(expected_tag));
+	mbedtls_platform_zeroize(nonce, sizeof(nonce));
 	return rc;
 }
 
+int decrypt_gcm_data(uint8_t *buffer, unsigned int size)
+{
+	struct fw_enc_hdr header;
+	uint8_t key[AIROHA_KEY_SIZE] = {0};
+	size_t key_len = sizeof(key), len;
+	unsigned int flags = 0;
+	int rc = CRYPTO_ERR_DECRYPTION;
 
-
-int decrypt_gcm_data(uint8_t *buffer, unsigned int size){
-	int result;
-	struct fw_enc_hdr* p_header;
-	void* payload = (void*) (buffer +sizeof(struct fw_enc_hdr));
-
-	enum fw_enc_status_t fw_enc_status;
-	uint8_t  airoha_key[AIROHA_KEY_SIZE];
-	size_t airoha_key_len = AIROHA_KEY_SIZE;
-	unsigned int key_flags = 0;
-
-	NOTICE("debug: buffer=0x%x, payload=%p, sizeof fw_hdr=0x%x.\n", buffer, payload, sizeof(struct fw_enc_hdr));	
-	int len;
-
-	p_header = (struct fw_enc_hdr*) buffer;
-	
-	if (!_is_valid_header(p_header)) {
-		printf("Encryption header check failed.\n");
-		return -ENOENT;
-	}
-
-	printf("Encryption header looks OK.\n");
-	
-	fw_enc_status = p_header->flags & FW_ENC_STATUS_FLAG_MASK;
-
-	if ((p_header->iv_len > ENC_MAX_IV_SIZE) ||
-	    (p_header->tag_len > ENC_MAX_TAG_SIZE)) {
-
-		#if (1)
-		printf("\033[33;1m header->iv_len = 0x%x", p_header->iv_len);
-		printf("\033[33;1m header->tag_len = 0x%x \033[0m", p_header->tag_len);
-		#else
-		printf("Incorrect IV or tag length\n");
-		return -ENOENT;
-		#endif
-	}
-
-	#if(0)
-	printf("dump iv:\n");
-	_dump_raw(p_header->iv,p_header->iv_len);
-	printf("dump tag:\n");
-	_dump_raw(p_header->tag,p_header->tag_len);
-	#endif
-	
-
-	plat_get_enc_key_info(fw_enc_status, airoha_key, &airoha_key_len, &key_flags, 0, 0);
-
-	#if(0)
-	printf("dump key:\n");
-	_dump_raw(airoha_key,airoha_key_len);
-	#endif
-
-	len = size - sizeof(struct fw_enc_hdr);
-	
-	printf("gcm len=%d (%d - %d)\n",len, size, sizeof(struct fw_enc_hdr));
-	
-	result = aes_gcm_decrypt(payload, len, airoha_key, airoha_key_len, p_header->iv, p_header->iv_len,
-				     p_header->tag, p_header->tag_len);
-
-	if(result==0){
-		//printf("moving back..\n");
-		memmove(payload-sizeof(struct fw_enc_hdr), payload, len);
-	}
-
-	return result;
+	if (buffer == NULL || size < sizeof(header))
+		return -EINVAL;
+	/* Snapshot untrusted metadata before validating and using it. */
+	memcpy(&header, buffer, sizeof(header));
+	if (header.magic != ENC_HEADER_MAGIC || header.dec_algo != 0U ||
+	    (header.flags & ~FW_ENC_STATUS_FLAG_MASK) != 0U ||
+	    header.iv_len == 0U || header.iv_len > ENC_MAX_IV_SIZE ||
+	    header.tag_len != ENC_MAX_TAG_SIZE)
+		return -EINVAL;
+	if (plat_get_enc_key_info(header.flags & FW_ENC_STATUS_FLAG_MASK,
+				  key, &key_len, &flags, 0, 0) != 0 ||
+	    !valid_aes_key_size(key_len))
+		goto out;
+	len = size - sizeof(header);
+	rc = aes_gcm_decrypt(buffer + sizeof(header), len, key, key_len,
+			     header.iv, header.iv_len, header.tag, header.tag_len);
+	if (rc == CRYPTO_SUCCESS)
+		memmove(buffer, buffer + sizeof(header), len);
+out:
+	mbedtls_platform_zeroize(key, sizeof(key));
+	mbedtls_platform_zeroize(&header, sizeof(header));
+	return rc;
 }
