@@ -39,15 +39,6 @@ XLAT = '''
 int mmap_add_dynamic_region(unsigned long long, uintptr_t, size_t, unsigned int);
 int mmap_remove_dynamic_region(uintptr_t, size_t);
 '''
-CRYPTO = '''
-#define CRYPTO_SUCCESS 0
-#define CRYPTO_ERR_DECRYPTION 5
-'''
-SIP = '''
-#define ECNT_SIP_E_SUCCESS 0
-#define ECNT_SIP_E_INVALID_PARAM -2
-#define ECNT_SIP_E_NOT_SUPPORTED -1
-'''
 with tempfile.TemporaryDirectory(prefix='airoha-tfa-security-') as folder:
     temp = Path(folder)
     def write(name, text):
@@ -56,13 +47,12 @@ with tempfile.TemporaryDirectory(prefix='airoha-tfa-security-') as folder:
         path.write_text(text)
     declaration = re.search(r'int ecnt_mbedtls_pkcs5_pbkdf2_compare\([^;]+;',
                             (COMMON / 'ecnt_plat_common.h').read_text()).group()
-    write('ecnt_plat_common.h', '#include <ecnt_smc_security.h>\n' + declaration + '\n' + SIP)
+    write('ecnt_plat_common.h', '#include <ecnt_smc_security.h>\n' + declaration + '\n#include <ecnt_sip_svc.h>\n')
     write('regression_mbedtls.h', CONFIG)
     write('platform_def.h', PLATFORM)
     write('ecnt_scu.h', 'unsigned int GET_DRAM_SIZE(void);\n')
     write('lib/xlat_tables/xlat_tables_v2.h', XLAT)
     write('common/debug.h', '')
-    write('drivers/auth/crypto_mod.h', CRYPTO)
     write('drivers/auth/mbedtls/mbedtls_common.h', '')
     write('plat/common/platform.h', '''
 #include <stddef.h>
@@ -76,6 +66,10 @@ int plat_get_enc_key_info(enum fw_enc_status_t, uint8_t *, size_t *,
     handlers = source[source.index('uint64_t ecnt_verify_handler('):]
     assert 'uint64_t ecnt_decrypt_dm_key_handler(' in handlers
     write('vendor_handlers.inc', handlers)
+    dispatch = (COMMON / 'ecnt_sip_svc.c').read_text()
+    start = dispatch.index('static spinlock_t crypto_lock;')
+    stop = dispatch.index('/*\n * This function handles Mediatek defined SiP Calls */', start)
+    write('vendor_dispatch.inc', dispatch[start:stop])
     libraries = ['aes', 'aesni', 'aesce', 'gcm', 'cipher', 'cipher_wrap', 'md',
                  'sha256', 'sha512', 'pkcs5', 'platform', 'platform_util', 'constant_time']
     sources = [COMMON / 'ecnt_decrypt_dm_key.c', COMMON / 'ecnt_plat_mbedtls.c',
