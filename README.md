@@ -42,7 +42,8 @@ Read [hardware evidence and installation limits](docs/XG-140G-TF.md) before usin
 
 实验性目标尚未真机启动验证，TF 与 TF-S 镜像不可互换；请先阅读上述硬件与安装限制。
 
-See the [2026-10-21 security and dependency review](docs/SECURITY-2026-10-21.md).
+See the [2026-11-03 security review](docs/SECURITY-2026-11-03.md) for vendor TF-A
+crypto/SMC fixes, validation limits and the decision to retain stable U-Boot v2026.10.
 
 ## Build / 构建
 
