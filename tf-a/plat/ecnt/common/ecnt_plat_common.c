@@ -5,6 +5,7 @@
  */
 
 #include <arch_helpers.h>
+#include <string.h>
 #include <common/desc_image_load.h>
 #include <common/debug.h>
 #include <drivers/console.h>
@@ -490,203 +491,153 @@ uint64_t ecnt_test_handler(uint32_t r1, uint32_t r2, uint32_t r3)
 	return ECNT_SIP_E_INVALID_PARAM;
 }
 
-uint64_t ecnt_verify_handler(uint32_t id, uint32_t r1, uint32_t r2, uint32_t r3)
+uint64_t ecnt_verify_handler(uint32_t id, uint32_t hash, uint32_t image,
+			     uint32_t length)
 {
-	bl_mem_params_node_t *bl_mem_params = NULL;
-	int err = 0;
-	uintptr_t base = 0;
-	uintptr_t size = 0;
-	uintptr_t hash_base = 0;
-	uintptr_t hash_size = 0;
+	bl_mem_params_node_t *params = get_bl_mem_params_node(id);
+	uintptr_t base, hash_base;
+	size_t size, hash_size;
+	int err;
 
-	bl_mem_params = get_bl_mem_params_node(id);
-
-	if ((bl_mem_params != NULL) && (r1 != 0) && (r2 != 0))
-	{
-		base = page_align((uintptr_t) r2, DOWN);
-		size = (page_align((uintptr_t) (r2 + r3), UP) - base);
-		err = mmap_add_dynamic_region((unsigned long long) base,
-				(uintptr_t) base, (size_t) size, (MT_RO_DATA | MT_NS));
-
-		if (err == 0)
-		{
-			set_fip_block_spec((size_t) r2, (size_t) r3);
-
-			hash_base = page_align((uintptr_t) r1, DOWN);
-			hash_size = (page_align((uintptr_t) (r1 + PAGE_SIZE), UP) - hash_base);
-
-			err = mmap_add_dynamic_region((unsigned long long) hash_base,
-					(uintptr_t) hash_base, (size_t) hash_size, (MT_RO_DATA | MT_NS));
-			if (err == 0)
-			{
-				image_hash_base = (uintptr_t) r1;
-
-				err = load_auth_image(bl_mem_params->image_id, &(bl_mem_params->image_info));
-				mmap_remove_dynamic_region((uintptr_t) hash_base, (size_t) hash_size);
-			}
-
-			set_fip_block_spec(0, 0);
-
-			mmap_remove_dynamic_region((uintptr_t) base, (size_t) size);
-		}
-
-		if (err != 0)
-		{
-			ERROR("BL31: Failed to verify image id %d (%i)\n",
-			      id, err);
-			//plat_error_handler(err);
-		}
-		else
-			return ECNT_SIP_E_SUCCESS;
+	if (params == NULL ||
+	    !ecnt_ns_window(image, length, &base, &size) ||
+	    !ecnt_ns_window(hash, PAGE_SIZE, &hash_base, &hash_size))
+		return ECNT_SIP_E_INVALID_PARAM;
+	if (mmap_add_dynamic_region(base, base, size, MT_RO_DATA | MT_NS) != 0)
+		return ECNT_SIP_E_INVALID_PARAM;
+	err = mmap_add_dynamic_region(hash_base, hash_base, hash_size,
+				      MT_RO_DATA | MT_NS);
+	if (err == 0) {
+		set_fip_block_spec(image, length);
+		image_hash_base = hash;
+		err = load_auth_image(params->image_id, &params->image_info);
+		image_hash_base = 0;
+		set_fip_block_spec(0, 0);
+		mmap_remove_dynamic_region(hash_base, hash_size);
 	}
-
-	return ECNT_SIP_E_INVALID_PARAM;
+	mmap_remove_dynamic_region(base, size);
+	return err == 0 ? ECNT_SIP_E_SUCCESS : ECNT_SIP_E_INVALID_PARAM;
 }
 
-uint64_t ecnt_decrypt_handler(uint32_t id, uint32_t r1, uint32_t r2, uint32_t r3)
+uint64_t ecnt_decrypt_handler(uint32_t id, uint32_t length, uint32_t image,
+			      uint32_t output)
 {
-	bl_mem_params_node_t *bl_mem_params = NULL;
-	int err = 0;
-	uintptr_t base = 0;
-	uintptr_t size = 0;
+	bl_mem_params_node_t *params = get_bl_mem_params_node(id);
+	uintptr_t base, output_base;
+	size_t size, output_size;
+	image_info_t saved;
+	int err;
 
-	uintptr_t img_base = 0;
-	uintptr_t img_size = 0;
-
-
-	bl_mem_params = get_bl_mem_params_node(id);
-
-	if ((bl_mem_params != NULL) && (r1 != 0) && (r2 != 0))
-	{
-			base = page_align((uintptr_t) r2, DOWN);
-			size = (page_align((uintptr_t) (0x2000 + r2 + r1), UP) - base);			
-			err = mmap_add_dynamic_region((unsigned long long) base,
-					(uintptr_t) base, (size_t) size, (MT_RO_DATA | MT_NS));
-			if (err == 0)
-			{
-
-				img_base = page_align((uintptr_t) r3, DOWN);
-				img_size = (page_align((uintptr_t) (r1 + r3), UP) - img_base);			
-				err = mmap_add_dynamic_region((unsigned long long) img_base,
-						(uintptr_t) img_base, (size_t) img_size, (MT_RW_DATA | MT_NS));
-				if (err == 0)
-				{
-					bl_mem_params->image_info.image_size = r1;
-					bl_mem_params->image_info.image_base = r3;
-					bl_mem_params->image_info.image_max_size = 0x10000000;
-					set_fip_block_spec((size_t) r2, (size_t) 0x2000);
-
-					err = load_auth_image(bl_mem_params->image_id, &(bl_mem_params->image_info));
-				}
-				else
-				{
-					printf("mmap_add_dynamic_region error ! (%d)\n",err);
-					mmap_remove_dynamic_region((uintptr_t) base, (size_t) size);
-					plat_error_handler(err);
-				}
-			}
-			else
-			{
-				printf("mmap_add_dynamic_region error ! (%d)\n",err);
-				plat_error_handler(err);
-			}
-			set_fip_block_spec(0,0);
-			bl_mem_params->image_info.image_base = TZRAM2_BASE;
-			bl_mem_params->image_info.image_size = 0;
-			bl_mem_params->image_info.image_max_size = TZRAM2_SIZE;
-
-			mmap_remove_dynamic_region((uintptr_t) img_base, (size_t) img_size);
-			mmap_remove_dynamic_region((uintptr_t) base, (size_t) size);
-		if (err != 0)
-		{
-			ERROR("BL31: Failed to verify image id %d (%i)\n",
-			      id, err);
-			//plat_error_handler(err);
-		}
-		else
-			return ECNT_SIP_E_SUCCESS;
+	if (params == NULL ||
+	    !ecnt_ns_window(image, (uint64_t)length + 0x2000U, &base, &size) ||
+	    !ecnt_ns_window(output, length, &output_base, &output_size))
+		return ECNT_SIP_E_INVALID_PARAM;
+	if (mmap_add_dynamic_region(base, base, size, MT_RO_DATA | MT_NS) != 0)
+		return ECNT_SIP_E_INVALID_PARAM;
+	err = mmap_add_dynamic_region(output_base, output_base, output_size,
+				      MT_RW_DATA | MT_NS);
+	if (err == 0) {
+		saved = params->image_info;
+		params->image_info.image_size = length;
+		params->image_info.image_base = output;
+		/* The loader may only write into the validated destination extent. */
+		params->image_info.image_max_size = length;
+		set_fip_block_spec(image, 0x2000);
+		err = load_auth_image(params->image_id, &params->image_info);
+		set_fip_block_spec(0, 0);
+		params->image_info = saved;
+		mmap_remove_dynamic_region(output_base, output_size);
 	}
-
-	return ECNT_SIP_E_INVALID_PARAM;
+	mmap_remove_dynamic_region(base, size);
+	return err == 0 ? ECNT_SIP_E_SUCCESS : ECNT_SIP_E_INVALID_PARAM;
 }
 
 #if defined(IMAGE_BL31)
-unsigned int iter_time = 0;
-unsigned int key_length = 0;
-unsigned int hash_algo = 0;
+static unsigned int iter_time;
+static unsigned int key_length;
+static unsigned int hash_algo;
 
-uint64_t ecnt_password_verify(uint32_t r2, uint32_t r3)
+uint64_t ecnt_password_verify(uint32_t address, uint32_t field_size)
 {
-	uintptr_t base = page_align((uintptr_t) r2, DOWN);
-	uintptr_t size = (size_t) (r3 + (PAGE_SIZE - (r3 % PAGE_SIZE)));
-	int ret = mmap_add_dynamic_region((unsigned long long) base, (uintptr_t) base, size, (MT_RO_DATA | MT_NS));
+	uintptr_t base;
+	size_t map_size, account_len, password_len;
+	/* Snapshot settings once; use the same bounded length for mapping/crypto. */
+	unsigned int iterations = iter_time, length = key_length, hash = hash_algo;
+	const char *account = (const char *)(uintptr_t)address;
+	const char *password;
+	const char *end;
+	const unsigned char *expected;
+	int ret;
 
-	if (ECNT_SIP_E_SUCCESS == ret)
-	{
-		char *username = ((char *) ((uintptr_t) base));
-		char *password = ((char *) ((uintptr_t) base + r3));
-		unsigned char *login_info = ((unsigned char *) ((uintptr_t) base + (r3*2)));
-
-		if (ecnt_mbedtls_pkcs5_pbkdf2_compare (username, password, login_info, iter_time, key_length, hash_algo) != 0)
-		{
-			ret = ECNT_SIP_E_INVALID_PARAM;
-		}
-
-		mmap_remove_dynamic_region((uintptr_t) base, size);
-	}
-
+	if (iterations == 0U || length == 0U || length > ECNT_PBKDF2_MAX_KEY_SIZE ||
+	    (hash != 256U && hash != 512U) || field_size == 0U ||
+	    !ecnt_ns_window(address, (uint64_t)field_size * 2U + length,
+			    &base, &map_size))
+		return ECNT_SIP_E_INVALID_PARAM;
+	ret = mmap_add_dynamic_region(base, base, map_size, MT_RO_DATA | MT_NS);
+	if (ret != 0)
+		return ECNT_SIP_E_INVALID_PARAM;
+	password = account + field_size;
+	expected = (const unsigned char *)password + field_size;
+	/* NUL must lie within each caller-supplied field, including unaligned ones. */
+	end = memchr(account, '\0', field_size);
+	ret = ECNT_SIP_E_INVALID_PARAM;
+	if (end == NULL)
+		goto out;
+	account_len = (size_t)(end - account);
+	end = memchr(password, '\0', field_size);
+	if (end == NULL)
+		goto out;
+	password_len = (size_t)(end - password);
+	if (ecnt_mbedtls_pkcs5_pbkdf2_compare(account, account_len,
+			password, password_len, expected, iterations, length, hash) == 0)
+		ret = ECNT_SIP_E_SUCCESS;
+out:
+	mmap_remove_dynamic_region(base, map_size);
 	return ret;
 }
 
-uint64_t ecnt_pbkdf2_setting (uint32_t r2, uint32_t r3)
+uint64_t ecnt_pbkdf2_setting(uint32_t iterations, uint32_t settings)
 {
-	iter_time = r2;
-	key_length = r3 & 0xffff;
-	hash_algo = ((r3 & 0xffff0000) >> 16);
+	unsigned int length = settings & 0xffffU;
+	unsigned int hash = settings >> 16;
 
+	if (iterations == 0U || length == 0U || length > ECNT_PBKDF2_MAX_KEY_SIZE ||
+	    (hash != 256U && hash != 512U))
+		return ECNT_SIP_E_INVALID_PARAM;
+	iter_time = iterations;
+	key_length = length;
+	hash_algo = hash;
 	return ECNT_SIP_E_SUCCESS;
 }
 
-uint64_t ecnt_password_verify_handler(uint32_t r1, uint32_t r2, uint32_t r3)
+uint64_t ecnt_password_verify_handler(uint32_t op, uint32_t arg, uint32_t size)
 {
-	int status = 0;
-
-	switch (r1)
-	{
-		case 0x504D4350: /* PCMP */
-			if (iter_time && key_length && hash_algo)
-			{
-				status = ecnt_password_verify(r2, r3);
-			}
-			else
-			{
-				status = ECNT_SIP_E_INVALID_PARAM;
-			}
-			break;
-
-		case 0x464E4353: /* SCNF */
-			status = ecnt_pbkdf2_setting(r2, r3);
-			break;
-
-		default:
-			return ECNT_SIP_E_NOT_SUPPORTED;
+	switch (op) {
+	case 0x504D4350: /* PCMP */
+		return ecnt_password_verify(arg, size);
+	case 0x464E4353: /* SCNF */
+		return ecnt_pbkdf2_setting(arg, size);
+	default:
+		return ECNT_SIP_E_NOT_SUPPORTED;
 	}
-
-	return status;
 }
 
-uint64_t ecnt_decrypt_dm_key_handler(uint32_t r1, uint32_t r2, uint32_t r3)
+uint64_t ecnt_decrypt_dm_key_handler(uint32_t address, uint32_t length,
+				     uint32_t unused)
 {
-	int ret = 0;
+	uintptr_t base;
+	size_t size;
+	int ret;
 
-	ret = decrypt_dm_key((uint8_t *) ((uintptr_t) r1), r2);
-
-	if(ret != 0)
-	{
-		printf("Failed: Decrypt dm key failed \n");
-	}
-
+	if (length == 0U || length > ECNT_DM_KEY_MAX_SIZE || length % 16U != 0U ||
+	    !ecnt_ns_window(address, length, &base, &size))
+		return ECNT_SIP_E_INVALID_PARAM;
+	ret = mmap_add_dynamic_region(base, base, size, MT_RW_DATA | MT_NS);
+	if (ret != 0)
+		return ECNT_SIP_E_INVALID_PARAM;
+	ret = decrypt_dm_key((uint8_t *)(uintptr_t)address, length);
+	mmap_remove_dynamic_region(base, size);
 	return ret;
 }
 #endif
-

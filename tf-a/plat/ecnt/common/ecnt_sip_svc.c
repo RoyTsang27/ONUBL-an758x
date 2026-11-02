@@ -5,11 +5,13 @@
  */
 
 #include <assert.h>
+#include <lib/spinlock.h>
 
 #include <common/debug.h>
 #include <common/runtime_svc.h>
 #include <drivers/console.h>
 #include <lib/mmio.h>
+#include <tools_share/firmware_encrypted.h>
 #include <tools_share/uuid.h>
 
 #include <plat_private.h>
@@ -37,6 +39,46 @@ uintptr_t ecnt_plat_sip_handler(uint32_t smc_fid,
 	SMC_RET1(handle, SMC_UNK);
 }
 
+/* Crypto calls share the FIP loader, heap and dynamic mappings. */
+static spinlock_t crypto_lock;
+
+static uint64_t ecnt_crypto_call(uint32_t fid, u_register_t x1,
+				u_register_t x2, u_register_t x3)
+{
+	uintptr_t base;
+	size_t size;
+	uint64_t ret = ECNT_SIP_E_INVALID_PARAM;
+
+	spin_lock(&crypto_lock);
+	switch (fid) {
+	case ECNT_SIP_VERIFY_PW_HANDLE:
+		ret = ecnt_password_verify_handler(x1, x2, x3);
+		break;
+	case ECNT_SIP_VERIFY_BL2_HANDLE:
+	case ECNT_SIP_VERIFY_BL33_HANDLE:
+		ret = ecnt_verify_handler(fid & 0xfU, x1, x2, x3);
+		break;
+	case ECNT_SIP_DCRYPT_GCM_F1_HANDLE:
+		if (x2 < sizeof(struct fw_enc_hdr) || x2 > UINT32_MAX ||
+		    !ecnt_ns_window(x1, x2, &base, &size))
+			break;
+		if (mmap_add_dynamic_region(base, base, size, MT_RW_DATA | MT_NS) != 0)
+			break;
+		ret = decrypt_gcm_data((uint8_t *)x1, (uint32_t)x2);
+		mmap_remove_dynamic_region(base, size);
+		break;
+	case ECNT_SIP_DCRYPT_DM_KEY_HANDLE:
+		ret = ecnt_decrypt_dm_key_handler(x1, x2, x3);
+		break;
+	case ECNT_SIP_DCRYPT_VERIFY_BL2_HANDLE:
+	case ECNT_SIP_DCRYPT_VERIFY_BL33_HANDLE:
+		ret = ecnt_decrypt_handler(fid & 0xfU, x1, x2, x3);
+		break;
+	}
+	spin_unlock(&crypto_lock);
+	return ret;
+}
+
 /*
  * This function handles Mediatek defined SiP Calls */
 uintptr_t ecnt_sip_handler(uint32_t smc_fid,
@@ -50,9 +92,6 @@ uintptr_t ecnt_sip_handler(uint32_t smc_fid,
 {
 	uint32_t ns = 0;
 	uint64_t ret = 0;
-	int status = 0;
-	uintptr_t mmap_base = 0;
-	uintptr_t mmap_size = 0;
 
 
 	/* if parameter is sent from SMC32. Clean top 32 bits */
@@ -89,55 +128,16 @@ uintptr_t ecnt_sip_handler(uint32_t smc_fid,
 			}
 			break;
 
-#if defined(IMAGE_BL31)
 			case ECNT_SIP_VERIFY_PW_HANDLE:
-			{
-				ret = ecnt_password_verify_handler((uint32_t)x1, (uint32_t)x2, (uint32_t)x3);
-				SMC_RET1(handle, ret);
-			}
-			break;
-#endif
-
 			case ECNT_SIP_VERIFY_BL2_HANDLE:
 			case ECNT_SIP_VERIFY_BL33_HANDLE:
-			{
-				ret = ecnt_verify_handler((uint32_t)(smc_fid & 0xF), (uint32_t)x1, (uint32_t)x2, (uint32_t)x3);
-				SMC_RET1(handle, ret);
-			}
-			break;
-
-			/* support IV and tag in the header,
-			 naming as format 1*/
-			case ECNT_SIP_DCRYPT_GCM_F1_HANDLE:	
-			{	
-				mmap_base = page_align((uintptr_t) x1, DOWN);
-				mmap_size = (page_align((uintptr_t) (x1 + x2), UP) - mmap_base);
-				
-				status = mmap_add_dynamic_region((unsigned long long) mmap_base,(uintptr_t) mmap_base, mmap_size, (MT_RW_DATA | MT_NS));
-				if(status){
-					printf(" mmap fail, err=%d \n", status);
-				}else{
-					ret = decrypt_gcm_data((uint8_t *)x1, (uint32_t)x2);
-					mmap_remove_dynamic_region((uintptr_t) mmap_base, mmap_size);
-					SMC_RET1(handle, ret);
-				}
-			}
-			break;
-
+			case ECNT_SIP_DCRYPT_GCM_F1_HANDLE:
 			case ECNT_SIP_DCRYPT_DM_KEY_HANDLE:
-			{
-				ret = ecnt_decrypt_dm_key_handler((uint32_t)x1, (uint32_t)x2, (uint32_t)x3);
-				SMC_RET1(handle, ret);
-			}
-			break;
-
 			case ECNT_SIP_DCRYPT_VERIFY_BL2_HANDLE:
 			case ECNT_SIP_DCRYPT_VERIFY_BL33_HANDLE:
-			{
-				ret = ecnt_decrypt_handler((uint32_t)(smc_fid & 0xF), (uint32_t)x1, (uint32_t)x2, (uint32_t)x3);
+				ret = ecnt_crypto_call(smc_fid, x1, x2, x3);
 				SMC_RET1(handle, ret);
-			}
-			break;
+				break;
 
 			case ECNT_SIP_AVS_HANDLE:
 			{

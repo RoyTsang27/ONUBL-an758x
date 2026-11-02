@@ -1,50 +1,43 @@
 /*
  * Copyright (c) 2016, ARM Limited and Contributors. All rights reserved.
- *
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include <ecnt_plat_common.h>
-#include <string.h>
-
-#include "mbedtls/pkcs5.h"
-#include "mbedtls/md.h"
-
-#define ARHT_HASH_ALGO_256	(256)
-#define ARHT_HASH_ALGO_512	(512)
+#include <mbedtls/constant_time.h>
+#include <mbedtls/md.h>
+#include <mbedtls/pkcs5.h>
+#include <mbedtls/platform_util.h>
 
 #if defined(IMAGE_BL31)
-int ecnt_mbedtls_pkcs5_pbkdf2_compare (char *account, char *password, unsigned char *login_auth, unsigned int iter_time, unsigned int key_length, unsigned int hash_algo)
+int ecnt_mbedtls_pkcs5_pbkdf2_compare(const char *account, size_t account_len,
+		const char *password, size_t password_len,
+		const unsigned char *login_auth, unsigned int iterations,
+		unsigned int key_length, unsigned int hash_algo)
 {
-	const mbedtls_md_info_t *info_sha;
-	int type = MBEDTLS_MD_SHA256, ret = MBEDTLS_ERR_PKCS5_BAD_INPUT_DATA;
+	const mbedtls_md_info_t *info;
+	mbedtls_md_context_t ctx;
+	unsigned char key[ECNT_PBKDF2_MAX_KEY_SIZE] = {0};
+	int ret = MBEDTLS_ERR_PKCS5_BAD_INPUT_DATA;
 
-	if (ARHT_HASH_ALGO_512 == hash_algo)
-	{
-		type = MBEDTLS_MD_SHA512;
+	if (account == NULL || password == NULL || login_auth == NULL ||
+	    iterations == 0U || key_length == 0U || key_length > sizeof(key) ||
+	    (hash_algo != 256U && hash_algo != 512U))
+		return ret;
+	info = mbedtls_md_info_from_type(hash_algo == 512U ?
+					 MBEDTLS_MD_SHA512 : MBEDTLS_MD_SHA256);
+	if (info == NULL)
+		return ret;
+	mbedtls_md_init(&ctx);
+	if (mbedtls_md_setup(&ctx, info, 1) == 0) {
+		ret = mbedtls_pkcs5_pbkdf2_hmac(&ctx,
+			(const unsigned char *)password, password_len,
+			(const unsigned char *)account, account_len,
+			iterations, key_length, key);
+		if (ret == 0 && mbedtls_ct_memcmp(key, login_auth, key_length) != 0)
+			ret = MBEDTLS_ERR_PKCS5_PASSWORD_MISMATCH;
 	}
-
-	info_sha = mbedtls_md_info_from_type( type );
-	if( NULL != info_sha)
-	{
-		mbedtls_md_context_t sha_ctx;
-
-		mbedtls_md_init( &sha_ctx );
-		if( 0 == mbedtls_md_setup (&sha_ctx, info_sha, 1))
-		{
-			unsigned char key[MBEDTLS_MD_MAX_BLOCK_SIZE] = {0};
-
-			ret = mbedtls_pkcs5_pbkdf2_hmac( &sha_ctx, (unsigned char *)password, strlen(password), (unsigned char *)account,
-			strlen(account), iter_time, key_length, key );
-
-			if ((0 == ret) && (0 != memcmp (key, login_auth, key_length)))
-			{
-				ret = MBEDTLS_ERR_PKCS5_PASSWORD_MISMATCH;
-			}
-		}
-
-		mbedtls_md_free( &sha_ctx );
-	}
-
+	mbedtls_md_free(&ctx);
+	mbedtls_platform_zeroize(key, sizeof(key));
 	return ret;
 }
 #endif
