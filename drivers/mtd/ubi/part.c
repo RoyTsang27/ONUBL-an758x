@@ -5,6 +5,7 @@
  * Author: Alexey Romanov <avromanov@salutedevices.com>
  */
 
+#include <dm/device.h>
 #include <memalign.h>
 #include <part.h>
 #include <ubi_uboot.h>
@@ -82,6 +83,13 @@ static void __maybe_unused part_print_ubi(struct blk_desc *dev_desc)
 static int part_test_ubi(struct blk_desc *dev_desc)
 {
 	ALLOC_CACHE_ALIGN_BUFFER(unsigned char, buffer, dev_desc->blksz);
+
+	if (!get_ubi_device())
+		return -1;
+
+	/* Only the block device created for UBI holds UBI volumes. */
+	if (!dev_desc->bdev || dev_desc->bdev->driver != DM_DRIVER_GET(ubi_blk))
+		return -1;
 
 	if (blk_dread(dev_desc, 0, 1, (ulong *)buffer) != 1)
 		return -1;

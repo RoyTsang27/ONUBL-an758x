@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0+
-"""Exercise the actual FIP and BMP parsers with hostile metadata under ASan/UBSan."""
+"""Exercise the FIP, FIT and BMP parsers with hostile metadata under ASan/UBSan."""
 from pathlib import Path
 import os
 import re
@@ -13,7 +13,7 @@ repo = Path(__file__).resolve().parents[2]
 
 
 def function(source, name):
-    match = re.search(r'^static[^;{}]*\b' + name + r'\([^;{}]*\)\n\{', source, re.M)
+    match = re.search(r'^(?:static|int)[^;{}]*\b' + name + r'\([^;{}]*\)\n\{', source, re.M)
     assert match, name
     end, depth = match.end(), 1
     while depth:
@@ -22,7 +22,7 @@ def function(source, name):
     return source[match.start():end]
 
 
-def compile_run(code, name):
+def compile_run(code, name, extra_args=()):
     with tempfile.TemporaryDirectory() as directory:
         source = Path(directory) / (name + '.c')
         binary = Path(directory) / name
@@ -30,7 +30,7 @@ def compile_run(code, name):
         command = shlex.split(os.environ.get('HOSTCC', 'cc'))
         command += ['-std=gnu11', '-O1', '-g', '-fno-omit-frame-pointer',
                     '-fsanitize=address,undefined', '-I' + str(repo / 'tf-a/include'),
-                    str(source), '-o', str(binary)]
+                    str(source), *extra_args, '-o', str(binary)]
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True)
 
@@ -234,6 +234,76 @@ int main(void) {
 helpers = bmp[bmp.index('static uint get_bmp_col_16bpp'):bmp.index('/**\n * video_splash_align_axis')]
 assert 'ret = video_display_rle8_bitmap' in bmp and 'if (ret)' in bmp
 compile_run(bmp_fixture + layout + video_format + bmp_device + helpers + bmp_cases, 'bmp')
+
+fit = (repo / 'boot/image-fit.c').read_text()
+fit_names = ['fit_image_get_data_' + name for name in
+             ('offset', 'position', 'size', 'size_unciphered')]
+fit_fixture = r'''
+#include <assert.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <libfdt.h>
+typedef uint32_t u32;
+#define FIT_DATA_OFFSET_PROP "data-offset"
+#define FIT_DATA_POSITION_PROP "data-position"
+#define FIT_DATA_SIZE_PROP "data-size"
+'''
+fit_cases = r'''
+int main(void)
+{
+    static const struct {
+        const char *property;
+        int (*read_cell)(const void *, int, u32 *);
+    } cases[] = {
+        { "data-offset", fit_image_get_data_offset },
+        { "data-position", fit_image_get_data_position },
+        { "data-size", fit_image_get_data_size },
+        { "data-size-unciphered", NULL },
+    };
+    uint64_t tree[128];
+    fdt32_t data[] = { cpu_to_fdt32(0x100), cpu_to_fdt32(0x200) };
+    int lengths[] = { -1, 0, 1, 3, 4, 5, 8 };
+    int node;
+
+    assert(fdt_create_empty_tree(tree, sizeof(tree)) == 0);
+    node = fdt_add_subnode(tree, 0, "kernel");
+    assert(node >= 0);
+    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        for (size_t j = 0; j < sizeof(lengths) / sizeof(*lengths); j++) {
+            int len = lengths[j];
+            u32 val = 0xdead;
+            size_t unciphered = 0xdead;
+            int ret;
+
+            if (len >= 0)
+                assert(fdt_setprop(tree, node, cases[i].property, data, len) == 0);
+            if (cases[i].read_cell) {
+                ret = cases[i].read_cell(tree, node, &val);
+            } else {
+                ret = fit_image_get_data_size_unciphered(tree, node, &unciphered);
+                assert(unciphered == (len == 4 ? 0x100 : 0xdead));
+                val = unciphered;
+            }
+            if (len == 4) {
+                assert(ret == 0);
+                assert(val == 0x100);
+            } else {
+                assert(ret == (len < 0 ? -ENOENT : -EINVAL));
+                assert(val == 0xdead);
+            }
+        }
+    }
+    puts("PASS: all four FIT readers reject invalid property lengths and preserve valid cells");
+    return 0;
+}
+'''
+libfdt = repo / 'scripts/dtc/libfdt'
+fit_sources = ['-I' + str(libfdt)] + [str(libfdt / (name + '.c')) for name in
+    ('fdt', 'fdt_empty_tree', 'fdt_ro', 'fdt_rw', 'fdt_sw', 'fdt_wip')]
+compile_run(fit_fixture + '\n'.join(function(fit, name) for name in fit_names) + fit_cases,
+            'fit', fit_sources)
+
 
 check = runpy.run_path(str(repo / 'scripts/check-mbedtls.py'))['check']
 with tempfile.TemporaryDirectory() as directory:
