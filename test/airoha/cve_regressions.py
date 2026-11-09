@@ -300,7 +300,7 @@ int main(void)
 '''
 libfdt = repo / 'scripts/dtc/libfdt'
 fit_sources = ['-I' + str(libfdt)] + [str(libfdt / (name + '.c')) for name in
-    ('fdt', 'fdt_empty_tree', 'fdt_ro', 'fdt_rw', 'fdt_sw')]
+    ('fdt', 'fdt_empty_tree', 'fdt_ro', 'fdt_rw', 'fdt_sw', 'fdt_wip')]
 compile_run(fit_fixture + '\n'.join(function(fit, name) for name in fit_names) + fit_cases,
             'fit', fit_sources)
 
