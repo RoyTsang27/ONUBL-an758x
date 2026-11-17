@@ -334,7 +334,7 @@ ubi_dir = repo / 'tf-a/drivers/io/ubi'
 def header_text(path):
     return re.sub(r'^#include[^\n]*\n', '', path.read_text(), flags=re.M)
 
-ubi_media = header_text(ubi_dir / 'ubi-media.h')
+ubi_media = header_text(repo / 'drivers/mtd/ubi/ubi-media.h')
 ubi_prefix = r'''
 #include <assert.h>
 #include <errno.h>
@@ -351,7 +351,10 @@ ubi_prefix = r'''
 #define ubi_dump_vol_info(...) ((void)0)
 #define dump_stack() ((void)0)
 #define be32_to_cpu be32toh
+typedef uint8_t __u8;
+typedef uint16_t __be16;
 typedef uint32_t __be32;
+typedef uint64_t __be64;
 '''
 ubi_core_fixture = r'''
 #define UBI_STATIC_VOLUME 4
