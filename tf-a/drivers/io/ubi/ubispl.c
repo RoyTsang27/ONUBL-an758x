@@ -586,12 +586,20 @@ static int ubi_attach_fastmap(struct ubi_scan_info *ubi,
 
 	/* read EC values from used list */
 	for (i = 0; i < be32toh(fmhdr->used_peb_count); i++) {
+		int pnum;
+
 		fmec = (struct ubi_fm_ec *)(fm_raw + fm_pos);
 		fm_pos += sizeof(*fmec);
 		if (fm_pos >= fm_size)
 			goto fail_bad;
 
-		generic_set_bit(be32toh(fmec->pnum), ubi->fm_used);
+		pnum = be32toh(fmec->pnum);
+		if (ubi_io_is_bad(ubi, pnum)) {
+			ubi_err("FM: Bad PEB in fastmap used list! %d", pnum);
+			goto fail_bad;
+		}
+
+		generic_set_bit(pnum, ubi->fm_used);
 	}
 
 	/* read EC values from scrub list */
@@ -632,7 +640,21 @@ static int ubi_attach_fastmap(struct ubi_scan_info *ubi,
 
 		fm_eba = (struct ubi_fm_eba *)(fm_raw + fm_pos);
 		fm_pos += sizeof(*fm_eba);
-		fm_pos += (sizeof(uint32_t) * be32toh(fm_eba->reserved_pebs));
+		if (fm_pos >= fm_size)
+			goto fail_bad;
+
+		/*
+		 * A volume cannot reserve more PEBs than the device has, and
+		 * bounding the count first keeps the multiplication below
+		 * from wrapping around on 32-bit builds.
+		 */
+		reserved = be32toh(fm_eba->reserved_pebs);
+		if (reserved > ubi->peb_count) {
+			ubi_err("bad fastmap EBA reserved PEBs: %u", reserved);
+			goto fail_bad;
+		}
+
+		fm_pos += sizeof(uint32_t) * reserved;
 		if (fm_pos >= fm_size)
 			goto fail_bad;
 
@@ -643,13 +665,17 @@ static int ubi_attach_fastmap(struct ubi_scan_info *ubi,
 			goto fail_bad;
 		}
 
-		reserved = be32toh(fm_eba->reserved_pebs);
 		ubi_dbg("FA: vol %u used %u res: %u", vol_id, used, reserved);
 		for (j = 0; j < reserved; j++) {
 			int pnum = be32toh(fm_eba->pnum[j]);
 
 			if ((int)be32toh(fm_eba->pnum[j]) < 0)
 				continue;
+
+			if (ubi_io_is_bad(ubi, pnum)) {
+				ubi_err("FM: Bad PEB in fastmap EBA! %d", pnum);
+				goto fail_bad;
+			}
 
 			if (!test_and_clear_bit(pnum, ubi->fm_used))
 				continue;
@@ -1007,6 +1033,18 @@ retry:
 	 * Get the data length of this block.
 	 */
 	dlen = be32toh(vh->data_size);
+
+	/*
+	 * A data_size beyond the LEB is never valid: reading it would run
+	 * past the PEB and past this LEB's part of the load buffer. Treat
+	 * the block as corrupt and look for another copy.
+	 */
+	if (dlen > ubi->leb_size) {
+		ubi_warn("Vol: %u LEB %u PEB %u bad data_size %u", vol_id,
+			 lnum, pnum, dlen);
+		generic_set_bit(pnum, ubi->corrupt);
+		goto find_other;
+	}
 
 	/* Return if we only want to get the data length,
 	 * or all data will be skipped
