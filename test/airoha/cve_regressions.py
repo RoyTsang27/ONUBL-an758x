@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0+
-"""Exercise the FIP, FIT and BMP parsers with hostile metadata under ASan/UBSan."""
+"""Exercise FIP, FIT, BMP and UBI parsers with hostile metadata under ASan/UBSan."""
 from pathlib import Path
 import os
 import re
@@ -327,3 +327,300 @@ with tempfile.TemporaryDirectory() as directory:
     except ValueError:
         pass
 print('PASS: dependency guard accepts patched 3.6.x and rejects old, unknown and unsupported major versions')
+
+# Use the actual UBI validators and the vendor preloader's complete fastmap
+# attach/load functions. Only flash I/O and unrelated attach helpers are mocked.
+ubi_dir = repo / 'tf-a/drivers/io/ubi'
+def header_text(path):
+    return re.sub(r'^#include[^\n]*\n', '', path.read_text(), flags=re.M)
+
+ubi_media = header_text(repo / 'drivers/mtd/ubi/ubi-media.h')
+ubi_prefix = r'''
+#include <assert.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <endian.h>
+#define __packed __attribute__((packed))
+#define ubi_err(...) ((void)0)
+#define ubi_dump_vid_hdr(...) ((void)0)
+#define ubi_dump_av(...) ((void)0)
+#define ubi_dump_vol_info(...) ((void)0)
+#define dump_stack() ((void)0)
+#define be32_to_cpu be32toh
+typedef uint8_t __u8;
+typedef uint16_t __be16;
+typedef uint32_t __be32;
+typedef uint64_t __be64;
+'''
+ubi_core_fixture = r'''
+#define UBI_STATIC_VOLUME 4
+struct ubi_device { int leb_size, peb_count; };
+struct ubi_volume {
+    struct ubi_device *ubi;
+    int reserved_pebs, vol_type, data_pad, usable_leb_size;
+};
+struct ubi_ainf_volume {
+    int highest_lnum, leb_count, vol_type, used_ebs, data_pad, last_data_size;
+};
+'''
+ubi_core_cases = r'''
+int main(void) {
+    struct ubi_device ubi = { .leb_size = 128, .peb_count = 4 };
+    struct ubi_vid_hdr hdr = { .vol_type = UBI_VID_STATIC,
+        .used_ebs = htobe32(1), .data_size = htobe32(128) };
+    struct ubi_volume vol = { .ubi = &ubi, .reserved_pebs = 1,
+        .vol_type = UBI_STATIC_VOLUME, .data_pad = 16, .usable_leb_size = 112 };
+    struct ubi_ainf_volume av = { .leb_count = 1, .used_ebs = 1,
+        .vol_type = UBI_STATIC_VOLUME, .data_pad = 16, .last_data_size = 112 };
+    assert(validate_vid_hdr(&ubi, &hdr) == 0);
+    hdr.data_size = htobe32(129); assert(validate_vid_hdr(&ubi, &hdr) != 0);
+    hdr.data_size = htobe32(UINT32_MAX); assert(validate_vid_hdr(&ubi, &hdr) != 0);
+    hdr.vol_type = UBI_VID_DYNAMIC; hdr.copy_flag = 1; hdr.used_ebs = 0;
+    hdr.data_size = htobe32(128); assert(validate_vid_hdr(&ubi, &hdr) == 0);
+    hdr.data_size = htobe32(129); assert(validate_vid_hdr(&ubi, &hdr) != 0);
+    assert(check_av(&vol, &av) == 0);
+    av.last_data_size = 113; assert(check_av(&vol, &av) == -EINVAL);
+    av.last_data_size = -1; assert(check_av(&vol, &av) == -EINVAL);
+    for (unsigned i = 0; i < 4; i++) {
+        int out = -1; assert(read_pnum(&ubi, htobe32(i), &out)); assert(out == i);
+    }
+    uint32_t invalid[] = { 4, INT32_MAX, UINT32_MAX };
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(*invalid); i++) {
+        int out = -1; assert(!read_pnum(&ubi, htobe32(invalid[i]), &out));
+        assert(out == -1);
+    }
+    puts("PASS: actual UBI VID, static-volume and fastmap PEB validators reject corrupt metadata; valid boundaries preserved");
+}
+'''
+ubi_io = (repo / 'drivers/mtd/ubi/io.c').read_text()
+ubi_vtbl = (repo / 'drivers/mtd/ubi/vtbl.c').read_text()
+ubi_fm = (repo / 'drivers/mtd/ubi/fastmap.c').read_text()
+compile_run(ubi_prefix + ubi_media + ubi_core_fixture +
+            function(ubi_io, 'validate_vid_hdr') + function(ubi_vtbl, 'check_av') +
+            function(ubi_fm, 'read_pnum') + ubi_core_cases, 'ubi_core')
+
+ubi_vendor = (ubi_dir / 'ubispl.c').read_text()
+ubi_vendor_prefix = r'''
+#include <assert.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <endian.h>
+#define __packed __attribute__((packed))
+#define ARM_ARCH_MAJOR 7
+#define WARN(...) ((void)0)
+#define NOTICE(...) ((void)0)
+#define VERBOSE(...) ((void)0)
+#define ERROR(...) ((void)0)
+'''
+ubi_vendor_stubs = r'''
+struct ubi_attach_info;
+static unsigned assignments, flash_reads;
+static int assign_aeb_to_av(struct ubi_scan_info *ubi, int pnum, int lnum,
+                           uint32_t vol_id, uint32_t vol_type, uint32_t used) {
+    assert(pnum >= 0 && pnum < ubi->peb_count); assignments++; return 0;
+}
+static int scan_pool(struct ubi_scan_info *ubi, uint32_t *pebs, int size) {
+    assert(size == 0); return 0;
+}
+static int ubi_rescan_fm_vid_hdr(struct ubi_scan_info *ubi, struct ubi_vid_hdr *hdr,
+                               uint32_t pnum, uint32_t vol_id, uint32_t lnum) {
+    assert(!"fixture blocks must already be scanned"); return -EINVAL;
+}
+uint32_t ubi_crc32(uint32_t crc, const void *buf, size_t size) { return 0; }
+static int flash_read(uint32_t pnum, unsigned long from, unsigned long len, void *buf) {
+    assert(pnum < 4 && len <= 32); flash_reads++; memset(buf, 0xa5, len); return 0;
+}
+'''
+ubi_vendor_cases = r'''
+int main(void) {
+    struct ubi_scan_info *ubi = calloc(1, sizeof(*ubi));
+    assert(ubi);
+    ubi->peb_count = 4; ubi->leb_size = 32; ubi->fm_size = sizeof(ubi->fm_buf);
+    size_t pos = sizeof(struct ubi_fm_sb);
+    struct ubi_fm_hdr *hdr = (void *)(ubi->fm_buf + pos); pos += sizeof(*hdr);
+    hdr->magic = htobe32(UBI_FM_HDR_MAGIC); hdr->used_peb_count = htobe32(1);
+    hdr->vol_count = htobe32(1);
+    for (int i = 0; i < 2; i++) {
+        struct ubi_fm_scan_pool *pool = (void *)(ubi->fm_buf + pos);
+        pool->magic = htobe32(UBI_FM_POOL_MAGIC); pos += sizeof(*pool);
+    }
+    struct ubi_fm_ec *ec = (void *)(ubi->fm_buf + pos); pos += sizeof(*ec);
+    struct ubi_fm_volhdr *vol = (void *)(ubi->fm_buf + pos); pos += sizeof(*vol);
+    vol->magic = htobe32(UBI_FM_VHDR_MAGIC); vol->vol_type = UBI_STATIC_VOLUME;
+    vol->used_ebs = htobe32(1);
+    struct ubi_fm_eba *eba = (void *)(ubi->fm_buf + pos);
+    eba->magic = htobe32(UBI_FM_EBA_MAGIC); eba->reserved_pebs = htobe32(1);
+    assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == 0 && assignments == 1);
+    uint32_t invalid[] = { 4, INT32_MAX, UINT32_MAX };
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(*invalid); i++) {
+        ec->pnum = htobe32(invalid[i]); assignments = 0;
+        assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == UBI_BAD_FASTMAP);
+        assert(!assignments);
+    }
+    ec->pnum = 0;
+    eba->pnum[0] = htobe32(4);
+    assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == UBI_BAD_FASTMAP);
+    eba->pnum[0] = htobe32(UINT32_MAX); assignments = 0;
+    assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == 0 && !assignments);
+    eba->pnum[0] = 0;
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(*invalid); i++) {
+        eba->reserved_pebs = htobe32(invalid[i] + (invalid[i] == 4));
+        assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == UBI_BAD_FASTMAP);
+    }
+    eba->reserved_pebs = htobe32(1);
+    ubi->fm_size = pos + sizeof(*eba);
+    assert(ubi_attach_fastmap(ubi, NULL, &ubi->fm_layout) == UBI_BAD_FASTMAP);
+
+    memset(ubi, 0, sizeof(*ubi)); ubi->peb_count = 4; ubi->leb_size = 32;
+    ubi->read = flash_read;
+    for (int i = 1; i < 4; i++) ubi->blockinfo[i].vol_id = htobe32(1);
+    struct ubi_vol_info *vi = &ubi->volinfo[0];
+    struct ubi_vid_hdr *vh = &ubi->blockinfo[0];
+    vh->used_ebs = htobe32(1); vh->data_size = htobe32(9);
+    generic_set_bit(0, vi->found); generic_set_bit(0, ubi->scanned);
+    unsigned char output[8]; uint32_t got;
+    assert(ubi_load_block(ubi, output, vi, 0, 0, 1, 1, 4, &got) == 9);
+    assert(got == 4 && flash_reads == 1);
+    for (unsigned i = 0; i < got; i++) assert(output[i] == 0xa5);
+    assert(ubi_load_block(ubi, output, vi, 0, 0, 1, 0, 4, &got) == 9);
+    assert(flash_reads == 1); /* valid cached reads still work */
+    uint32_t bad_sizes[] = { 33, UINT32_MAX };
+    for (unsigned i = 0; i < sizeof(bad_sizes) / sizeof(*bad_sizes); i++) {
+        vh->data_size = htobe32(bad_sizes[i]); flash_reads = 0;
+        generic_set_bit(0, vi->found); generic_clear_bit(0, ubi->corrupt);
+        assert(ubi_load_block(ubi, output, vi, 0, 0, 1, 0, 4, &got) == -EINVAL);
+        assert(!flash_reads && test_bit(0, ubi->corrupt));
+    }
+    /* A corrupt copy must not prevent loading a valid replacement. */
+    ubi->blockinfo[1] = *vh; ubi->blockinfo[1].data_size = htobe32(9);
+    generic_set_bit(1, ubi->scanned); generic_set_bit(0, vi->found);
+    generic_clear_bit(0, ubi->corrupt); ubi->leb_cache_info.valid = 0;
+    assert(ubi_load_block(ubi, output, vi, 0, 0, 1, 0, 4, &got) == 9);
+    assert(flash_reads == 1 && vi->lebs_to_pebs[0] == 1);
+    free(ubi);
+    puts("PASS: actual TF-A UBI attach/load reject PEB, EBA and LEB overflows; valid loads, cache and replacement fallback preserved");
+}
+'''
+ubi_vendor_headers = ''.join(header_text(path) for path in
+    (repo / 'tf-a/include/drivers/io/io_ubi.h', ubi_dir / 'ubi-media.h',
+     ubi_dir / 'ubi-wrapper.h', ubi_dir / 'compat.h', ubi_dir / 'ubispl.h'))
+compile_run(ubi_vendor_prefix + ubi_vendor_headers + ubi_vendor_stubs +
+            '\n'.join(function(ubi_vendor, name) for name in
+                      ('ubi_io_read', 'ubi_io_is_bad', 'ubi_attach_fastmap', 'ubi_load_block')) +
+            ubi_vendor_cases, 'ubi_vendor')
+
+
+# Exercise the complete host importer with real files, mmap and libfdt.
+fit_tool = (repo / 'tools/fit_image.c').read_text()
+fit_import_fixture = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <libfdt.h>
+typedef uint32_t u32;
+#define FIT_DATA_OFFSET_PROP "data-offset"
+#define FIT_DATA_POSITION_PROP "data-position"
+#define FIT_DATA_SIZE_PROP "data-size"
+#define FIT_DATA_PROP "data"
+#define FIT_IMAGES_PATH "/images"
+#define FIT_CONFS_PATH "/configurations"
+#define FIT_DEFAULT_PROP "default"
+#define FIT_KERNEL_PROP "kernel"
+#define FIT_RAMDISK_PROP "ramdisk"
+#define FIT_FDT_PROP "fdt"
+#define FIT_LOADABLE_PROP "loadables"
+#define FIT_FPGA_PROP "fpga"
+#define FIT_FIRMWARE_PROP "firmware"
+#define FIT_SCRIPT_PROP "script"
+#define O_BINARY 0
+#define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#define debug(...) ((void)0)
+struct image_tool_params { const char *cmdname; };
+static int mmap_fdt(const char *cmd, const char *name, int size, void **mapped,
+                    struct stat *st, bool first, bool second) {
+    int fd = open(name, O_RDONLY); assert(fd >= 0);
+    assert(fstat(fd, st) == 0);
+    *mapped = mmap(NULL, st->st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    assert(*mapped != MAP_FAILED && fdt_check_header(*mapped) == 0);
+    return fd;
+}
+'''
+fit_import_cases = r'''
+static void import_case(bool absolute, uint32_t location, uint32_t length,
+                        int cell_length, int expected, bool imported) {
+    uint64_t tree[256]; char path[] = "/tmp/an758x-fit-XXXXXX";
+    struct image_tool_params params = { .cmdname = "fit-regression" };
+    fdt32_t cells[2] = { cpu_to_fdt32(location), 0 };
+    assert(fdt_create_empty_tree(tree, sizeof(tree)) == 0);
+    assert(fdt_add_subnode(tree, 0, "configurations") >= 0);
+    int images = fdt_add_subnode(tree, 0, "images"); assert(images >= 0);
+    int node = fdt_add_subnode(tree, images, "kernel"); assert(node >= 0);
+    const char *prop = absolute ? FIT_DATA_POSITION_PROP : FIT_DATA_OFFSET_PROP;
+    assert(fdt_setprop(tree, node, prop, cells, cell_length) == 0);
+    assert(fdt_setprop_u32(tree, node, FIT_DATA_SIZE_PROP, length) == 0);
+    assert(fdt_pack(tree) == 0);
+    int tree_size = fdt_totalsize(tree);
+    int external_base = ALIGN(tree_size, 4);
+    if (absolute && location == 0 && cell_length == 4)
+        assert(fdt_setprop_inplace_u32(tree, node, prop, external_base) == 0);
+    int fd = mkstemp(path); assert(fd >= 0);
+    assert(write(fd, tree, tree_size) == tree_size);
+    /* Relative FIT data begins at the four-byte-aligned FDT end. */
+    uint32_t padding = 0;
+    assert(write(fd, &padding, external_base - tree_size) == external_base - tree_size);
+    assert(write(fd, "payload!", 8) == 8); close(fd);
+    assert(fit_import_data(&params, path) == expected);
+    uint64_t result_words[512]; unsigned char *result = (void *)result_words;
+    fd = open(path, O_RDONLY); assert(fd >= 0);
+    ssize_t got = read(fd, result, sizeof(result_words)); assert(got > 0); close(fd);
+    if (expected) {
+        assert(got == external_base + 8 && memcmp(result, tree, tree_size) == 0);
+        assert(memcmp(result + external_base, "payload!", 8) == 0);
+    } else {
+        node = fdt_path_offset(result, "/images/kernel"); assert(node >= 0);
+        int size; const void *data = fdt_getprop(result, node, FIT_DATA_PROP, &size);
+        if (imported) {
+            assert(data && size == length);
+            if (length) assert(memcmp(data, "payload!", length) == 0);
+            assert(!fdt_getprop(result, node, FIT_DATA_SIZE_PROP, NULL));
+        } else {
+            assert(!data && fdt_getprop(result, node, prop, NULL));
+        }
+    }
+    assert(unlink(path) == 0);
+}
+int main(void) {
+    import_case(false, 0, 8, 4, 0, true);
+    import_case(true, 0, 8, 4, 0, true);
+    import_case(false, 0, 9, 4, -EINVAL, false);
+    import_case(true, UINT32_MAX, 8, 4, -EINVAL, false);
+    import_case(false, UINT32_MAX, 8, 4, -EINVAL, false);
+    import_case(false, 0, UINT32_MAX, 4, -EINVAL, false);
+    for (int size = 0; size <= 8; size++) {
+        if (size != 4) import_case(false, 0, 8, size, 0, false);
+    }
+    /* mkimage -E -p compatibility: an empty payload may be beyond EOF. */
+    import_case(true, UINT32_MAX, 0, 4, 0, true);
+    puts("PASS: actual FIT importer rejects out-of-file data without modifying input; valid relative, absolute and empty payloads preserved");
+}
+'''
+compile_run(fit_import_fixture + '\n'.join(function(fit, name) for name in fit_names[:3]) +
+            function(fit_tool, 'fit_import_data') + fit_import_cases,
+            'fit_import', fit_sources)
