@@ -577,18 +577,22 @@ static void import_case(bool absolute, uint32_t location, uint32_t length,
     assert(fdt_setprop_u32(tree, node, FIT_DATA_SIZE_PROP, length) == 0);
     assert(fdt_pack(tree) == 0);
     int tree_size = fdt_totalsize(tree);
+    int external_base = ALIGN(tree_size, 4);
     if (absolute && location == 0 && cell_length == 4)
-        assert(fdt_setprop_inplace_u32(tree, node, prop, tree_size) == 0);
+        assert(fdt_setprop_inplace_u32(tree, node, prop, external_base) == 0);
     int fd = mkstemp(path); assert(fd >= 0);
     assert(write(fd, tree, tree_size) == tree_size);
+    /* Relative FIT data begins at the four-byte-aligned FDT end. */
+    uint32_t padding = 0;
+    assert(write(fd, &padding, external_base - tree_size) == external_base - tree_size);
     assert(write(fd, "payload!", 8) == 8); close(fd);
     assert(fit_import_data(&params, path) == expected);
     uint64_t result_words[512]; unsigned char *result = (void *)result_words;
     fd = open(path, O_RDONLY); assert(fd >= 0);
     ssize_t got = read(fd, result, sizeof(result_words)); assert(got > 0); close(fd);
     if (expected) {
-        assert(got == tree_size + 8 && memcmp(result, tree, tree_size) == 0);
-        assert(memcmp(result + tree_size, "payload!", 8) == 0);
+        assert(got == external_base + 8 && memcmp(result, tree, tree_size) == 0);
+        assert(memcmp(result + external_base, "payload!", 8) == 0);
     } else {
         node = fdt_path_offset(result, "/images/kernel"); assert(node >= 0);
         int size; const void *data = fdt_getprop(result, node, FIT_DATA_PROP, &size);
