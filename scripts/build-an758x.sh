@@ -18,8 +18,8 @@ Optional environment:
   BUILD_JOBS            Parallel jobs (default: detected CPU count)
   AIROHA_SIGN_KEY_PATH   RSA-4096 PEM private-key file (first choice)
   AIROHA_SIGN_KEY        RSA-4096 PEM private-key contents
-  AIROHA_REQUIRE_SIGNING 0 allows unsigned development builds (default);
-                        1 requires a signing key and successful FIP signing
+  AIROHA_REQUIRE_SIGNING 1 requires signing (default); set to 0 only for
+                        unsigned development builds
 
 XG-140G-TF and TF-S are experimental, separate targets; see docs/XG-140G-TF.md.
 
