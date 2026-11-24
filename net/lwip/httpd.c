@@ -1914,8 +1914,8 @@ int uboot_httpd_start_mode(bool with_dhcp, bool privileged)
 	return ret < 0 ? ret : 0;
 }
 
-/* Existing callers, including the physical Reset button, retain full access. */
+/* Use restricted recovery unless full access is explicitly requested by CLI. */
 int uboot_httpd_start(bool with_dhcp)
 {
-	return uboot_httpd_start_mode(with_dhcp, true);
+	return uboot_httpd_start_mode(with_dhcp, false);
 }
