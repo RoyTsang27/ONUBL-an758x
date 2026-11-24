@@ -11,7 +11,7 @@ case "$require_signing" in
 		echo "AIROHA_REQUIRE_SIGNING must be 0 or 1." >&2
 		exit 2
 		;;
-esac
+require_signing="${AIROHA_REQUIRE_SIGNING-1}"
 
 if [ -n "${AIROHA_SIGN_KEY_PATH:-}" ] && [ -f "$AIROHA_SIGN_KEY_PATH" ]; then
 	key_path="$(readlink -f -- "$AIROHA_SIGN_KEY_PATH")"
