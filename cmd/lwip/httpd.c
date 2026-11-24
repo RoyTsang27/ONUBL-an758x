@@ -21,8 +21,7 @@ static int do_httpd(struct cmd_tbl *cmdtp, int flag, int argc,
 			 !mode_set) {
 			privileged = !strcmp(argv[i], "full");
 			mode_set = true;
-		}
-		else
+		} else
 			return CMD_RET_USAGE;
 	}
 
