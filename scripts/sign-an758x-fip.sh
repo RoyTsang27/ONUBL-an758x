@@ -4,14 +4,14 @@ set -eu
 
 [ "$#" -eq 3 ] || { echo "usage: $0 <tf-a-tree> <preloader-fip> <bl31-uboot-fip>" >&2; exit 2; }
 
-require_signing="${AIROHA_REQUIRE_SIGNING-0}"
+require_signing="${AIROHA_REQUIRE_SIGNING-1}"
 case "$require_signing" in
 	0|1) ;;
 	*)
 		echo "AIROHA_REQUIRE_SIGNING must be 0 or 1." >&2
 		exit 2
 		;;
-require_signing="${AIROHA_REQUIRE_SIGNING-1}"
+esac
 
 if [ -n "${AIROHA_SIGN_KEY_PATH:-}" ] && [ -f "$AIROHA_SIGN_KEY_PATH" ]; then
 	key_path="$(readlink -f -- "$AIROHA_SIGN_KEY_PATH")"
