@@ -219,7 +219,7 @@ static int disk_write(__u32 block, __u32 nr_blocks, void *buf)
  */
 static int flush_dirty_fat_buffer(fsdata *mydata)
 {
-	int getsize = FATBUFBLOCKS;
+	__u32 getsize;
 	__u32 fatlength = mydata->fatlength;
 	__u8 *bufptr = mydata->fatbuf;
 	__u32 startblock = mydata->fatbufnum * FATBUFBLOCKS;
@@ -230,9 +230,10 @@ static int flush_dirty_fat_buffer(fsdata *mydata)
 	if (!fat_is_dirty(mydata) || (mydata->fatbufnum == -1))
 		return 0;
 
-	/* Cap length if fatlength is not a multiple of FATBUFBLOCKS */
-	if (startblock + getsize > fatlength)
-		getsize = fatlength - startblock;
+	/* Reject a cache window outside the FAT and cap the final partial window. */
+	if (startblock >= fatlength)
+		return -EINVAL;
+	getsize = min_t(__u32, FATBUFBLOCKS, fatlength - startblock);
 
 	startblock += mydata->fat_sect;
 
@@ -465,14 +466,15 @@ static int set_fatent_value(fsdata *mydata, __u32 entry, __u32 entry_value)
 
 	/* Read a new block of FAT entries into the cache. */
 	if (bufnum != mydata->fatbufnum) {
-		int getsize = FATBUFBLOCKS;
+		__u32 getsize;
 		__u8 *bufptr = mydata->fatbuf;
 		__u32 fatlength = mydata->fatlength;
 		__u32 startblock = bufnum * FATBUFBLOCKS;
 
-		/* Cap length if fatlength is not a multiple of FATBUFBLOCKS */
-		if (startblock + getsize > fatlength)
-			getsize = fatlength - startblock;
+		/* Reject a cache window outside the FAT and cap the final partial window. */
+		if (startblock >= fatlength)
+			return -EINVAL;
+		getsize = min_t(__u32, FATBUFBLOCKS, fatlength - startblock);
 
 		if (flush_dirty_fat_buffer(mydata) < 0)
 			return -1;
