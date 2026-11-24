@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0+
-"""Exercise FIP, FIT, BMP and UBI parsers with hostile metadata under ASan/UBSan."""
+"""Exercise firmware parsers, the allocator and FAT cache bounds under ASan/UBSan."""
 from pathlib import Path
 import os
 import re
@@ -624,3 +624,149 @@ int main(void) {
 compile_run(fit_import_fixture + '\n'.join(function(fit, name) for name in fit_names[:3]) +
             function(fit_tool, 'fit_import_data') + fit_import_cases,
             'fit_import', fit_sources)
+
+# Exercise the production allocator with one bank and a bounded address range.
+lmb_source = (repo / 'lib/lmb.c').read_text()
+lmb_fixture = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+typedef uint64_t phys_addr_t;
+typedef uint64_t phys_size_t;
+typedef uint32_t u32;
+typedef unsigned long ulong;
+#define LMB_ALLOC_ANYWHERE 0
+#define LMB_NOOVERWRITE 4
+#define LMB_MAP_OP_RESERVE 1
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define ALIGN_DOWN(n, a) ((n) & ~((phys_addr_t)(a) - 1))
+#define log_debug(...) ((void)0)
+struct lmb_region { phys_addr_t base; phys_size_t size; };
+struct alist { struct lmb_region *data; int count; };
+static struct { struct alist available_mem, used_mem; } lmb;
+static long lmb_overlap_checks(struct alist *regions, phys_addr_t base,
+                              phys_size_t size, u32 flags, bool alloc)
+{
+    assert(regions->count == 0);
+    return -1;
+}
+static int lmb_add_region_flags(struct alist *regions, phys_addr_t base,
+                               phys_size_t size, u32 flags)
+{
+    assert(regions->count == 0);
+    regions->data[regions->count++] = (struct lmb_region){base, size};
+    return 0;
+}
+static int lmb_map_update_notify(phys_addr_t base, phys_size_t size,
+                                 int operation, u32 flags)
+{
+    return 0;
+}
+'''
+lmb_cases = r'''
+int main(void)
+{
+    struct lmb_region available = {0x100000, 0x10000};
+    struct lmb_region reserved = {0};
+    phys_addr_t limit = 0x101000;
+
+    lmb.available_mem = (struct alist){&available, 1};
+    lmb.used_mem = (struct alist){&reserved, 0};
+    assert(_lmb_alloc_base(0x2000, 0x1000, &limit, 0) < 0);
+    assert(limit == 0x101000 && lmb.used_mem.count == 0);
+    assert(_lmb_alloc_base(0x1000, 0x1000, &limit, 0) == 0);
+    assert(limit == available.base && lmb.used_mem.count == 1);
+    assert(reserved.base == available.base && reserved.size == 0x1000);
+
+    available.base = 0;
+    lmb.used_mem.count = 0;
+    limit = 0x1000;
+    assert(_lmb_alloc_base(0x2000, 0x1000, &limit, 0) < 0);
+    assert(limit == 0x1000 && lmb.used_mem.count == 0);
+    puts("PASS: limited LMB allocation rejects insufficient space and accepts an exact fit");
+}
+'''
+compile_run(lmb_fixture + function(lmb_source, '_lmb_alloc_base') + lmb_cases,
+            'lmb_limit')
+
+# Keep the real FAT cache functions and replace only block I/O and cache state.
+fat_source = (repo / 'fs/fat/fat_write.c').read_text()
+fat_fixture = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <endian.h>
+typedef uint8_t __u8;
+typedef uint16_t __u16;
+typedef uint32_t __u32;
+#define FATBUFBLOCKS 6
+#define FATBUFSIZE (mydata->sect_size * FATBUFBLOCKS)
+#define FAT12BUFSIZE ((FATBUFSIZE * 2) / 3)
+#define FAT16BUFSIZE (FATBUFSIZE / 2)
+#define FAT32BUFSIZE (FATBUFSIZE / 4)
+#define min_t(t, a, b) ((t)(a) < (t)(b) ? (t)(a) : (t)(b))
+#define cpu_to_le16 htole16
+#define cpu_to_le32 htole32
+#define debug(...) ((void)0)
+typedef struct {
+    __u32 fatlength, fat_sect, fats, fatsize, sect_size;
+    int fatbufnum;
+    bool dirty;
+    __u8 *fatbuf;
+} fsdata;
+static unsigned reads, writes;
+static __u32 read_start, read_count, write_start, write_count;
+static bool fat_is_dirty(fsdata *data) { return data->dirty; }
+static void fat_mark_clean(fsdata *data) { data->dirty = false; }
+static void fat_mark_dirty(fsdata *data) { data->dirty = true; }
+static int disk_read(__u32 start, __u32 count, void *buffer)
+{
+    assert(count > 0 && count <= FATBUFBLOCKS);
+    read_start = start;
+    read_count = count;
+    reads++;
+    memset(buffer, 0, count * 512);
+    return 0;
+}
+static int disk_write(__u32 start, __u32 count, void *buffer)
+{
+    assert(count > 0 && count <= FATBUFBLOCKS);
+    write_start = start;
+    write_count = count;
+    writes++;
+    return 0;
+}
+'''
+fat_cases = r'''
+int main(void)
+{
+    __u32 buffer[512 * FATBUFBLOCKS / sizeof(__u32)] = {0};
+    fsdata data = { .fatlength = 8, .fat_sect = 2, .fats = 2,
+                    .fatsize = 32, .sect_size = 512, .fatbufnum = -1,
+                    .fatbuf = (void *)buffer };
+    const __u32 entries_per_window = sizeof(buffer) / sizeof(*buffer);
+
+    assert(set_fatent_value(&data, entries_per_window, 3) == 0);
+    assert(reads == 1 && read_start == 8 && read_count == 2);
+    assert(data.dirty && buffer[0] == htole32(3));
+    assert(flush_dirty_fat_buffer(&data) == 0);
+    assert(writes == 2 && write_start == 16 && write_count == 2);
+    assert(!data.dirty);
+
+    data.fatlength = FATBUFBLOCKS;
+    data.fatbufnum = -1;
+    assert(set_fatent_value(&data, entries_per_window, 3) == -EINVAL);
+    assert(reads == 1 && writes == 2 && !data.dirty);
+    data.fatbufnum = 1;
+    data.dirty = true;
+    assert(flush_dirty_fat_buffer(&data) == -EINVAL);
+    assert(writes == 2 && data.dirty);
+    puts("PASS: FAT cache caps partial windows and rejects out-of-table I/O");
+}
+'''
+compile_run(fat_fixture + function(fat_source, 'flush_dirty_fat_buffer') +
+            function(fat_source, 'set_fatent_value') + fat_cases, 'fat_cache')
