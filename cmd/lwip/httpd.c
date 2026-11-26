@@ -8,8 +8,7 @@ static int do_httpd(struct cmd_tbl *cmdtp, int flag, int argc,
 		    char *const argv[])
 {
 	bool with_dhcp = false;
-	bool privileged = false;
-	bool mode_set = false;
+	bool privileged = true;
 	int i;
 
 	if (argc > 3)
@@ -17,11 +16,9 @@ static int do_httpd(struct cmd_tbl *cmdtp, int flag, int argc,
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "dhcp") && !with_dhcp)
 			with_dhcp = true;
-		else if ((!strcmp(argv[i], "safe") || !strcmp(argv[i], "full")) &&
-			 !mode_set) {
-			privileged = !strcmp(argv[i], "full");
-			mode_set = true;
-		} else
+		else if (!strcmp(argv[i], "safe") && privileged)
+			privileged = false;
+		else
 			return CMD_RET_USAGE;
 	}
 
@@ -34,6 +31,6 @@ static int do_httpd(struct cmd_tbl *cmdtp, int flag, int argc,
 
 U_BOOT_CMD(httpd, 3, 0, do_httpd,
 	   "start the browser management and recovery service",
-	   "[dhcp] [safe|full]\n"
+	   "[dhcp] [safe]\n"
 	   "    - serve HTTP on the recovery address; 'dhcp' also leases one address\n"
-	   "      safe mode is the default; 'full' enables privileged recovery operations");
+	   "      'safe' restricts automatic recovery to info, boot retry and reset");
