@@ -4,7 +4,7 @@ set -eu
 
 [ "$#" -eq 3 ] || { echo "usage: $0 <tf-a-tree> <preloader-fip> <bl31-uboot-fip>" >&2; exit 2; }
 
-require_signing="${AIROHA_REQUIRE_SIGNING-1}"
+require_signing="${AIROHA_REQUIRE_SIGNING-0}"
 case "$require_signing" in
 	0|1) ;;
 	*)
