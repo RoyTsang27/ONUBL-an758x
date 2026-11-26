@@ -29,12 +29,7 @@ footer{text-align:center;padding:12px 0 4px}footer a{color:var(--blue)}
 <div><span>RAM / Flash</span><strong id="memory">—</strong></div>
 <div><span data-t="version">Version</span><strong id="version">—</strong></div>
 </div>
-<nav id="managementNav"><button data-tab="flash" class="active" data-t="flash">Flash</button><button data-tab="backup" data-t="backup">Backup</button><button data-tab="advanced" data-t="advanced">Advanced</button></nav>
-<section class="panel" id="safeModePanel" hidden>
-<h2 data-t="safeModeTitle">Restricted recovery</h2>
-<p data-t="safeModeHint">Only booting the installed system and reboot are enabled. For maintenance, use the serial console and explicitly start full recovery.</p>
-<div class="row"><button data-action="boot-production" data-t="bootSystem">Boot system</button><button data-action="reset" data-t="reboot">Reboot</button></div>
-</section>
+<nav><button data-tab="flash" class="active" data-t="flash">Flash</button><button data-tab="backup" data-t="backup">Backup</button><button data-tab="advanced" data-t="advanced">Advanced</button></nav>
 <section class="panel" id="flash">
 <div id="bl2Section">
 <h2 data-t="bl2Title">Flash BL2</h2>
@@ -96,10 +91,10 @@ footer{text-align:center;padding:12px 0 4px}footer a{color:var(--blue)}
 <script>
 'use strict';
 const words={
-zh:{bl2Title:'刷写 BL2',ubiOperations:'UBI 操作',firstInstall:'首次刷机需要先重建 UBI。重建会清空其中的全部数据。',boardData:'板级数据',ubootTitle:'刷写 U-Boot',model:'机型',version:'版本',flash:'刷机',backup:'备份',advanced:'高级',safeModeTitle:'受限恢复模式',safeModeHint:'当前仅允许启动已安装的系统或重启。维护时请使用串口控制台并明确启动完整恢复模式。',install:'刷写系统',uploadFlash:'上传并刷写',bootSystem:'启动系统',reboot:'重启',target:'目标',download:'下载备份',ramBoot:'内存启动',uploadBoot:'上传并启动',rebuild:'重建 UBI',partitionWrite:'分区写入',restoreAll:'恢复整片 Flash',restoreAllHint:'从 Flash 开头恢复主数据 .bin，包含引导程序和板级数据。坏块保留原偏移，不包含 OOB。文件不能超过 Flash 容量。',flashTooLarge:'文件超过 Flash 容量',clearBadBlocks:'清除坏块标记',clearBadBlocksHint:'擦除整片 NAND 闪存，包括出厂标记的坏块。所有数据将丢失。',scrubConfirm1:'此操作将清除所有坏块标记并擦除全部数据！\n\n点击"确定"后，请在 5 秒内再次点击按钮以确认。',scrubConfirm2:'再次点击以执行清除坏块操作！',uploadWrite:'上传并写入',environment:'环境变量',save:'保存',console:'命令控制台',execute:'执行',serial:'返回串口',cancel:'取消传输',idle:'就绪',upload:'上传中',downloadPhase:'下载中',queued:'等待执行',working:'正在处理',done:'完成',error:'操作失败',erase:'擦除中',create:'创建卷',ready:'上传完成','backup-ready':'备份已就绪',verify:'校验中',write:'写入中',waiting:'等待设备响应',busy:'设备正在处理其他操作',choose:'请选择文件',failed:'请求失败',cancelled:'传输已取消',whole:'整片 Flash',mtdHint:'MTD 备份为物理主数据，坏块填充 FF；NAND OOB 不包含在文件中。',volumeHint:'UBI 卷数据',taskChanged:'设备任务已变化，请刷新页面',network:'连接中断，请检查设备状态'},
-en:{bl2Title:'Flash BL2',ubiOperations:'UBI operations',firstInstall:'For the first installation, rebuild UBI first. Rebuilding erases all data in UBI.',boardData:'Board data',ubootTitle:'Flash U-Boot',model:'Model',version:'Version',flash:'Flash',backup:'Backup',advanced:'Advanced',safeModeTitle:'Restricted recovery',safeModeHint:'Only booting the installed system and reboot are enabled. For maintenance, use the serial console and explicitly start full recovery.',install:'Install system',uploadFlash:'Upload and flash',bootSystem:'Boot system',reboot:'Reboot',target:'Target',download:'Download backup',ramBoot:'RAM boot',uploadBoot:'Upload and boot',rebuild:'Rebuild UBI',partitionWrite:'Write partition',restoreAll:'Restore entire Flash',restoreAllHint:'Restores a main-area .bin from offset 0, including bootloader and board data. Bad-block offsets stay in place; OOB is not included. The file must fit in Flash.',flashTooLarge:'File exceeds Flash capacity',clearBadBlocks:'Clear bad block markers',clearBadBlocksHint:'Erases the entire NAND chip including factory bad blocks. All data will be lost.',scrubConfirm1:'This will clear all bad block markers and erase all data!\n\nClick OK, then click the button again within 5 seconds to confirm.',scrubConfirm2:'Click again to execute scrub!',uploadWrite:'Upload and write',environment:'Environment',save:'Save',console:'Command console',execute:'Run',serial:'Return to serial',cancel:'Cancel transfer',idle:'Ready',upload:'Uploading',downloadPhase:'Downloading',queued:'Queued',working:'Working',done:'Complete',error:'Operation failed',erase:'Erasing',create:'Creating volumes',ready:'Upload complete','backup-ready':'Backup ready',verify:'Verifying',write:'Writing',waiting:'Waiting for device',busy:'Device is busy',choose:'Select a file',failed:'Request failed',cancelled:'Transfer cancelled',whole:'Entire Flash',mtdHint:'MTD backup contains physical main-area data with bad blocks padded with FF. NAND OOB is excluded.',volumeHint:'UBI volume data',taskChanged:'Device task changed; refresh the page',network:'Connection lost; check device status'}
+zh:{bl2Title:'刷写 BL2',ubiOperations:'UBI 操作',firstInstall:'首次刷机需要先重建 UBI。重建会清空其中的全部数据。',boardData:'板级数据',ubootTitle:'刷写 U-Boot',model:'机型',version:'版本',flash:'刷机',backup:'备份',advanced:'高级',install:'刷写系统',uploadFlash:'上传并刷写',bootSystem:'启动系统',reboot:'重启',target:'目标',download:'下载备份',ramBoot:'内存启动',uploadBoot:'上传并启动',rebuild:'重建 UBI',partitionWrite:'分区写入',restoreAll:'恢复整片 Flash',restoreAllHint:'从 Flash 开头恢复主数据 .bin，包含引导程序和板级数据。坏块保留原偏移，不包含 OOB。文件不能超过 Flash 容量。',flashTooLarge:'文件超过 Flash 容量',clearBadBlocks:'清除坏块标记',clearBadBlocksHint:'擦除整片 NAND 闪存，包括出厂标记的坏块。所有数据将丢失。',scrubConfirm1:'此操作将清除所有坏块标记并擦除全部数据！\n\n点击"确定"后，请在 5 秒内再次点击按钮以确认。',scrubConfirm2:'再次点击以执行清除坏块操作！',uploadWrite:'上传并写入',environment:'环境变量',save:'保存',console:'命令控制台',execute:'执行',serial:'返回串口',cancel:'取消传输',idle:'就绪',upload:'上传中',downloadPhase:'下载中',queued:'等待执行',working:'正在处理',done:'完成',error:'操作失败',erase:'擦除中',create:'创建卷',ready:'上传完成','backup-ready':'备份已就绪',verify:'校验中',write:'写入中',waiting:'等待设备响应',busy:'设备正在处理其他操作',choose:'请选择文件',failed:'请求失败',cancelled:'传输已取消',whole:'整片 Flash',mtdHint:'MTD 备份为物理主数据，坏块填充 FF；NAND OOB 不包含在文件中。',volumeHint:'UBI 卷数据',taskChanged:'设备任务已变化，请刷新页面',network:'连接中断，请检查设备状态'},
+en:{bl2Title:'Flash BL2',ubiOperations:'UBI operations',firstInstall:'For the first installation, rebuild UBI first. Rebuilding erases all data in UBI.',boardData:'Board data',ubootTitle:'Flash U-Boot',model:'Model',version:'Version',flash:'Flash',backup:'Backup',advanced:'Advanced',install:'Install system',uploadFlash:'Upload and flash',bootSystem:'Boot system',reboot:'Reboot',target:'Target',download:'Download backup',ramBoot:'RAM boot',uploadBoot:'Upload and boot',rebuild:'Rebuild UBI',partitionWrite:'Write partition',restoreAll:'Restore entire Flash',restoreAllHint:'Restores a main-area .bin from offset 0, including bootloader and board data. Bad-block offsets stay in place; OOB is not included. The file must fit in Flash.',flashTooLarge:'File exceeds Flash capacity',clearBadBlocks:'Clear bad block markers',clearBadBlocksHint:'Erases the entire NAND chip including factory bad blocks. All data will be lost.',scrubConfirm1:'This will clear all bad block markers and erase all data!\n\nClick OK, then click the button again within 5 seconds to confirm.',scrubConfirm2:'Click again to execute scrub!',uploadWrite:'Upload and write',environment:'Environment',save:'Save',console:'Command console',execute:'Run',serial:'Return to serial',cancel:'Cancel transfer',idle:'Ready',upload:'Uploading',downloadPhase:'Downloading',queued:'Queued',working:'Working',done:'Complete',error:'Operation failed',erase:'Erasing',create:'Creating volumes',ready:'Upload complete','backup-ready':'Backup ready',verify:'Verifying',write:'Writing',waiting:'Waiting for device',busy:'Device is busy',choose:'Select a file',failed:'Request failed',cancelled:'Transfer cancelled',whole:'Entire Flash',mtdHint:'MTD backup contains physical main-area data with bad blocks padded with FF. NAND OOB is excluded.',volumeHint:'UBI volume data',taskChanged:'Device task changed; refresh the page',network:'Connection lost; check device status'}
 };
-let language=(navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en', localBusy=false, remoteBusy=true, activeXHR=null, targets=[], flashBytes=0, selectedTab='flash', rebooting=false, privilegedMode=false;
+let language=(navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en', localBusy=false, remoteBusy=true, activeXHR=null, targets=[], flashBytes=0, selectedTab='flash', rebooting=false;
 const el=id=>document.getElementById(id), t=key=>words[language][key]||key, text=(id,value)=>{el(id).textContent=value};
 function applyLanguage(){
  document.documentElement.lang=language==='zh'?'zh-CN':'en';
@@ -111,7 +106,7 @@ function controls(){
  document.querySelectorAll('button,input,select').forEach(e=>{e.disabled=localBusy||remoteBusy});
  el('cancel').disabled=false;el('cancel').hidden=!activeXHR;
 }
-function tab(name){selectedTab=name;['flash','backup','advanced'].forEach(n=>{el(n).hidden=!privilegedMode||n!==name;document.querySelector('[data-tab="'+n+'"]').classList.toggle('active',n===name)})}
+function tab(name){selectedTab=name;['flash','backup','advanced'].forEach(n=>{el(n).hidden=n!==name;document.querySelector('[data-tab="'+n+'"]').classList.toggle('active',n===name)})}
 function hint(){const v=targets[Number(el('backupTarget').value)];text('backupHint',v?t(v.kind==='mtd'?'mtdHint':'volumeHint'):'')}
 function catalog(){
  for(const id of ['backupTarget','writeTarget']){
@@ -148,7 +143,6 @@ async function request(url,options){
 }
 async function refresh(){
  const [d,s]=await Promise.all([request('/api/device'),request('/api/storage')]);targets=s.targets||[];
- privilegedMode=d.privileged===true;el('managementNav').hidden=!privilegedMode;el('safeModePanel').hidden=privilegedMode;
  text('model',d.model);text('memory',bytes(d.ram_bytes)+' / '+bytes(d.flash_bytes));text('version',d.version);
  flashBytes=d.flash_bytes;
  const hasBl2=targets.some(v=>v.kind==='mtd'&&v.name==='bl2');
@@ -156,7 +150,7 @@ async function refresh(){
  el('bootDivider').hidden=!(hasBl2&&d.ubi);el('ubiManagement').hidden=!d.rebuild;
  el('boardDataSection').hidden=!d.board_data.length;boardData(d.board_data);
  document.querySelector('[data-tab="flash"]').hidden=!(hasBl2||d.ubi);
- if(!hasBl2&&!d.ubi&&selectedTab==='flash')selectedTab='backup';tab(selectedTab);catalog();
+ if(!hasBl2&&!d.ubi&&selectedTab==='flash')tab('backup');catalog();
 }
 function status(s){remoteBusy=s.busy;text('state',t(s.phase==='download'?'downloadPhase':s.phase));text('output',s.output||'');controls()}
 async function waitTask(id){
